@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fio — compromisso, tarefa, documento</title>
+<meta name="description" content="Fio: capture compromissos e gastos no momento em que acontecem, antes que você esqueça.">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="./style.css">
+<script src="./config.js"></script>
+</head>
+<body>
+
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">Fio</span>
+  </div>
+  <button id="btn-settings" class="icon-btn" type="button" aria-label="Ajustes">⚙</button>
+</header>
+
+<nav class="tab-bar" aria-label="Navegação principal">
+  <button class="tab-btn is-active" data-tab="compromissos" type="button" aria-current="page">
+    <span class="tab-icon" aria-hidden="true">🗓</span><span>Compromissos</span>
+  </button>
+  <button class="tab-btn" data-tab="financeiro" type="button">
+    <span class="tab-icon" aria-hidden="true">💰</span><span>Financeiro</span>
+  </button>
+  <button class="tab-btn" data-tab="documentos" type="button">
+    <span class="tab-icon" aria-hidden="true">📄</span><span>Documentos</span>
+  </button>
+</nav>
+
+<main id="main-content">
+
+  <!-- ===================== COMPROMISSOS ===================== -->
+  <section id="view-compromissos" class="view is-active" aria-labelledby="tab-compromissos-h">
+    <h1 id="tab-compromissos-h" class="visually-hidden">Compromissos</h1>
+
+    <div class="view-toolbar">
+      <label class="visually-hidden" for="filter-appt-type">Filtrar por tipo</label>
+      <select id="filter-appt-type">
+        <option value="">Todos os tipos</option>
+        <option value="consulta">Consulta</option>
+        <option value="exame">Exame</option>
+        <option value="reuniao">Reunião</option>
+        <option value="outro">Outro</option>
+      </select>
+      <label class="visually-hidden" for="filter-appt-from">De</label>
+      <input type="date" id="filter-appt-from" title="De">
+      <label class="visually-hidden" for="filter-appt-to">Até</label>
+      <input type="date" id="filter-appt-to" title="Até">
+    </div>
+
+    <div id="appt-timeline" class="timeline" aria-live="polite"></div>
+    <p id="appt-empty" class="empty-state" hidden>Nenhum compromisso ainda. Toque em “+” para capturar o primeiro.</p>
+  </section>
+
+  <!-- ===================== FINANCEIRO ===================== -->
+  <section id="view-financeiro" class="view" aria-labelledby="tab-financeiro-h">
+    <h1 id="tab-financeiro-h" class="visually-hidden">Financeiro</h1>
+
+    <div class="fin-subtabs" role="tablist" aria-label="Seções financeiras">
+      <button class="fin-subtab-btn is-active" data-finsub="painel" type="button" role="tab" aria-selected="true">Painel</button>
+      <button class="fin-subtab-btn" data-finsub="lancamentos" type="button" role="tab" aria-selected="false">Lançamentos</button>
+      <button class="fin-subtab-btn" data-finsub="fixas" type="button" role="tab" aria-selected="false">Fixas</button>
+      <button class="fin-subtab-btn" data-finsub="cartoes" type="button" role="tab" aria-selected="false">Cartões</button>
+    </div>
+
+    <div id="finsub-painel" class="finsub is-active">
+      <div class="month-nav">
+        <button id="btn-month-prev" class="icon-btn" type="button" aria-label="Mês anterior">‹</button>
+        <span id="current-month-label" class="month-label"></span>
+        <button id="btn-month-next" class="icon-btn" type="button" aria-label="Próximo mês">›</button>
+      </div>
+      <div class="summary-grid" id="summary-grid"></div>
+      <h2 class="section-heading">Faturas de cartão (projeção)</h2>
+      <div id="card-projections" class="card-projections"></div>
+    </div>
+
+    <div id="finsub-lancamentos" class="finsub">
+      <div class="view-toolbar">
+        <label class="visually-hidden" for="filter-exp-category">Filtrar por categoria</label>
+        <select id="filter-exp-category">
+          <option value="">Todas as categorias</option>
+        </select>
+      </div>
+      <ul id="variable-expense-list" class="list" aria-live="polite"></ul>
+      <p id="expense-empty" class="empty-state" hidden>Nenhum gasto lançado neste mês.</p>
+    </div>
+
+    <div id="finsub-fixas" class="finsub">
+      <button id="btn-add-fixed" class="btn btn-secondary" type="button">+ Nova despesa fixa</button>
+      <ul id="fixed-expense-list" class="list"></ul>
+    </div>
+
+    <div id="finsub-cartoes" class="finsub">
+      <button id="btn-add-card" class="btn btn-secondary" type="button">+ Novo cartão</button>
+      <ul id="card-list" class="list"></ul>
+    </div>
+  </section>
+
+  <!-- ===================== DOCUMENTOS ===================== -->
+  <section id="view-documentos" class="view" aria-labelledby="tab-documentos-h">
+    <h1 id="tab-documentos-h" class="visually-hidden">Documentos</h1>
+    <div class="view-toolbar">
+      <label class="visually-hidden" for="filter-doc-kind">Filtrar por origem</label>
+      <select id="filter-doc-kind">
+        <option value="">Todos</option>
+        <option value="appointment">De compromissos</option>
+        <option value="financial">Financeiros</option>
+      </select>
+      <button id="btn-upload-doc" class="btn btn-secondary" type="button">+ Enviar documento</button>
+      <input type="file" id="input-upload-doc" accept=".pdf,.csv,.xml,image/*" class="visually-hidden" aria-label="Selecionar documento financeiro">
+    </div>
+    <ul id="documents-list" class="list" aria-live="polite"></ul>
+    <p id="documents-empty" class="empty-state" hidden>Nenhum documento ainda.</p>
+  </section>
+
+</main>
+
+<button id="btn-fab" class="fab" type="button" aria-label="Nova captura" aria-haspopup="dialog">+</button>
+
+<!-- ===================== NOVA CAPTURA (modal) ===================== -->
+<dialog id="modal-capture" class="modal modal-capture" aria-labelledby="capture-title">
+  <form id="form-capture" method="dialog">
+    <div class="modal-header">
+      <h2 id="capture-title">Nova captura</h2>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Fechar">✕</button>
+    </div>
+
+    <div class="segmented" role="tablist" aria-label="Tipo de captura">
+      <button type="button" class="segmented-btn is-active" data-capture-kind="compromisso" role="tab" aria-selected="true">Compromisso</button>
+      <button type="button" class="segmented-btn" data-capture-kind="gasto" role="tab" aria-selected="false">Gasto</button>
+    </div>
+
+    <div class="field">
+      <label for="capture-text">Cole um texto compartilhado, fale ou digite</label>
+      <div class="capture-text-row">
+        <textarea id="capture-text" rows="3" placeholder="Ex: consulta com Dr. Paulo sábado às 16h"></textarea>
+        <button type="button" id="btn-voice" class="icon-btn icon-btn-voice" aria-label="Ditar por voz">🎤</button>
+      </div>
+      <p id="voice-status" class="hint" aria-live="polite"></p>
+      <button type="button" id="btn-interpret" class="btn btn-secondary btn-small">Interpretar texto</button>
+    </div>
+
+    <p id="capture-source-hint" class="hint" hidden></p>
+
+    <!-- Compromisso fields -->
+    <fieldset id="fields-compromisso" class="capture-fields">
+      <legend class="visually-hidden">Dados do compromisso</legend>
+      <div class="field">
+        <label for="appt-title">Título</label>
+        <input type="text" id="appt-title" required>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="appt-type">Tipo</label>
+          <select id="appt-type">
+            <option value="consulta">Consulta</option>
+            <option value="exame">Exame</option>
+            <option value="reuniao">Reunião</option>
+            <option value="outro" selected>Outro</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="appt-date">Data</label>
+          <input type="date" id="appt-date" required>
+        </div>
+        <div class="field">
+          <label for="appt-time">Hora</label>
+          <input type="time" id="appt-time" required>
+        </div>
+      </div>
+      <p id="conflict-warning" class="warning-banner" role="alert" hidden></p>
+    </fieldset>
+
+    <!-- Gasto fields -->
+    <fieldset id="fields-gasto" class="capture-fields" hidden>
+      <legend class="visually-hidden">Dados do gasto</legend>
+      <div class="field">
+        <label for="exp-desc">Descrição</label>
+        <input type="text" id="exp-desc">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="exp-value">Valor (R$)</label>
+          <input type="number" id="exp-value" step="0.01" min="0">
+        </div>
+        <div class="field">
+          <label for="exp-category">Categoria</label>
+          <input type="text" id="exp-category" list="category-suggestions" placeholder="mercado, transporte...">
+          <datalist id="category-suggestions"></datalist>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="exp-payment">Forma de pagamento</label>
+          <select id="exp-payment">
+            <option value="pix">Pix</option>
+            <option value="dinheiro">Dinheiro</option>
+            <option value="debito">Débito</option>
+            <option value="cartao">Cartão</option>
+          </select>
+        </div>
+        <div class="field" id="exp-card-field" hidden>
+          <label for="exp-card">Cartão</label>
+          <select id="exp-card"></select>
+        </div>
+        <div class="field">
+          <label for="exp-date">Data</label>
+          <input type="date" id="exp-date">
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-text" data-close-modal>Cancelar</button>
+      <button type="submit" class="btn btn-primary">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===================== VOCÊ FOI? (modal) ===================== -->
+<dialog id="modal-attendance" class="modal modal-small" aria-labelledby="attendance-title">
+  <h2 id="attendance-title">Você foi?</h2>
+  <p id="attendance-appt-label" class="modal-subtitle"></p>
+  <div class="modal-actions modal-actions-split">
+    <button type="button" id="btn-attendance-no" class="btn btn-secondary">Não fui</button>
+    <button type="button" id="btn-attendance-yes" class="btn btn-primary">Sim, fui</button>
+  </div>
+</dialog>
+
+<!-- ===================== REAGENDAR (modal) ===================== -->
+<dialog id="modal-reschedule" class="modal modal-small" aria-labelledby="reschedule-title">
+  <h2 id="reschedule-title">Reagendar</h2>
+  <div class="field-row">
+    <div class="field">
+      <label for="reschedule-date">Nova data</label>
+      <input type="date" id="reschedule-date" required>
+    </div>
+    <div class="field">
+      <label for="reschedule-time">Nova hora</label>
+      <input type="time" id="reschedule-time" required>
+    </div>
+  </div>
+  <div class="modal-actions">
+    <button type="button" class="btn btn-text" data-close-modal>Cancelar</button>
+    <button type="button" id="btn-confirm-reschedule" class="btn btn-primary">Reagendar</button>
+  </div>
+</dialog>
+
+<!-- ===================== DETALHE DO COMPROMISSO (modal) ===================== -->
+<dialog id="modal-appt-detail" class="modal" aria-labelledby="appt-detail-title">
+  <div class="modal-header">
+    <h2 id="appt-detail-title">Compromisso</h2>
+    <button type="button" class="icon-btn" data-close-modal aria-label="Fechar">✕</button>
+  </div>
+  <div id="appt-detail-body"></div>
+  <div class="field">
+    <label for="appt-attach-input">Anexar documento (PDF, foto de guia, receita, resultado)</label>
+    <input type="file" id="appt-attach-input" accept=".pdf,image/*">
+  </div>
+  <ul id="appt-attachments-list" class="list list-compact"></ul>
+  <div class="modal-actions">
+    <button type="button" id="btn-delete-appt" class="btn btn-danger-text">Excluir compromisso</button>
+  </div>
+</dialog>
+
+<!-- ===================== AJUSTES (modal) ===================== -->
+<dialog id="modal-settings" class="modal" aria-labelledby="settings-title">
+  <div class="modal-header">
+    <h2 id="settings-title">Ajustes</h2>
+    <button type="button" class="icon-btn" data-close-modal aria-label="Fechar">✕</button>
+  </div>
+
+  <section class="settings-section">
+    <h3>Notificações</h3>
+    <p class="hint">Lembretes de compromissos e alertas de vencimento de contas.</p>
+    <button type="button" id="btn-enable-notifications" class="btn btn-secondary">Ativar notificações</button>
+    <p id="notification-status" class="hint"></p>
+  </section>
+
+  <section class="settings-section">
+    <h3>Google Agenda</h3>
+    <p class="hint">Espelha automaticamente cada compromisso criado no Fio para o seu Google Agenda.</p>
+    <button type="button" id="btn-google-connect" class="btn btn-secondary">Conectar Google</button>
+    <p id="google-status" class="hint"></p>
+  </section>
+
+  <section class="settings-section">
+    <h3>Sugestões por e-mail (Gmail)</h3>
+    <p class="hint">Varre e-mails recentes em busca de confirmações de consulta/exame e sugere compromissos — nada é criado automaticamente.</p>
+    <button type="button" id="btn-gmail-scan" class="btn btn-secondary">Buscar sugestões</button>
+    <ul id="email-suggestions-list" class="list list-compact"></ul>
+  </section>
+</dialog>
+
+<!-- ===================== NOVA DESPESA FIXA (modal) ===================== -->
+<dialog id="modal-fixed" class="modal modal-small" aria-labelledby="fixed-title">
+  <form id="form-fixed" method="dialog">
+    <div class="modal-header">
+      <h2 id="fixed-title">Despesa fixa</h2>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Fechar">✕</button>
+    </div>
+    <div class="field">
+      <label for="fixed-label">Nome</label>
+      <input type="text" id="fixed-label" required placeholder="Aluguel, assinatura...">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="fixed-value">Valor (R$)</label>
+        <input type="number" id="fixed-value" step="0.01" min="0" required>
+      </div>
+      <div class="field">
+        <label for="fixed-dueday">Dia de vencimento</label>
+        <input type="number" id="fixed-dueday" min="1" max="31" required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="fixed-iscard">
+        <input type="checkbox" id="fixed-iscard" style="width:auto;display:inline-block;margin-right:6px;">
+        Cobrado no cartão de crédito
+      </label>
+    </div>
+    <div class="field" id="fixed-card-field" hidden>
+      <label for="fixed-card">Cartão</label>
+      <select id="fixed-card"></select>
+    </div>
+    <div class="modal-actions">
+      <button type="button" id="btn-delete-fixed" class="btn btn-danger-text" hidden>Excluir</button>
+      <button type="button" class="btn btn-text" data-close-modal>Cancelar</button>
+      <button type="submit" class="btn btn-primary">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===================== NOVO CARTÃO (modal) ===================== -->
+<dialog id="modal-card" class="modal modal-small" aria-labelledby="card-title">
+  <form id="form-card" method="dialog">
+    <div class="modal-header">
+      <h2 id="card-title">Cartão</h2>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Fechar">✕</button>
+    </div>
+    <div class="field">
+      <label for="card-name">Nome do cartão</label>
+      <input type="text" id="card-name" required placeholder="Nubank, Inter...">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="card-closing">Dia de fechamento</label>
+        <input type="number" id="card-closing" min="1" max="31">
+      </div>
+      <div class="field">
+        <label for="card-due">Dia de vencimento</label>
+        <input type="number" id="card-due" min="1" max="31">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-text" data-close-modal>Cancelar</button>
+      <button type="submit" class="btn btn-primary">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
