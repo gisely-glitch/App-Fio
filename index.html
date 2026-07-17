@@ -90,7 +90,19 @@
           <option value="">Todas as categorias</option>
         </select>
       </div>
-      <ul id="variable-expense-list" class="list" aria-live="polite"></ul>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Data</th>
+              <th scope="col">Descrição</th>
+              <th scope="col" class="col-value">Despesa</th>
+              <th scope="col"><span class="visually-hidden">Ações</span></th>
+            </tr>
+          </thead>
+          <tbody id="variable-expense-tbody" aria-live="polite"></tbody>
+        </table>
+      </div>
       <p id="expense-empty" class="empty-state" hidden>Nenhum gasto lançado neste mês.</p>
     </div>
 

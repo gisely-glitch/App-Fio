@@ -614,28 +614,28 @@ async function renderLancamentos() {
   const cards = await listCards();
   const cardsById = new Map(cards.map((c) => [c.id, c]));
 
-  const list = $('#variable-expense-list');
-  list.innerHTML = '';
+  const tbody = $('#variable-expense-tbody');
+  tbody.innerHTML = '';
   $('#expense-empty').hidden = items.length > 0;
   for (const exp of items) {
-    const li = document.createElement('li');
-    li.className = 'list-item';
+    const tr = document.createElement('tr');
     const cardLabel = exp.paymentMethod === 'cartao'
-      ? ` (${exp.cardId ? escapeHtml(cardsById.get(exp.cardId)?.name || '?') : 'sem cartão definido'})`
+      ? ` · ${exp.cardId ? escapeHtml(cardsById.get(exp.cardId)?.name || '?') : 'sem cartão definido'}`
       : '';
-    li.innerHTML = `
-      <div class="list-item-main">
-        <div class="list-item-title">${escapeHtml(exp.desc)}</div>
-        <div class="list-item-sub">${formatDate(exp.date)} · ${exp.category} · ${PAYMENT_LABELS[exp.paymentMethod] || exp.paymentMethod}${cardLabel}</div>
-      </div>
-      <div class="list-item-value">${formatCurrency(exp.value)}</div>
-      <div class="list-item-actions"><button type="button" class="icon-btn" aria-label="Excluir lançamento">🗑</button></div>`;
-    li.querySelector('button').addEventListener('click', async () => {
+    tr.innerHTML = `
+      <td>${formatDate(exp.date)}</td>
+      <td class="col-desc" title="${escapeHtml(exp.desc)}">
+        <span class="col-desc-title">${escapeHtml(exp.desc)}</span>
+        <span class="col-desc-sub">${exp.category} · ${PAYMENT_LABELS[exp.paymentMethod] || exp.paymentMethod}${cardLabel}</span>
+      </td>
+      <td class="col-value">${formatCurrency(exp.value)}</td>
+      <td class="col-action"><button type="button" class="icon-btn" aria-label="Excluir lançamento">🗑</button></td>`;
+    tr.querySelector('button').addEventListener('click', async () => {
       await deleteVariableExpense(exp.id);
       renderLancamentos();
       renderPainel();
     });
-    list.appendChild(li);
+    tbody.appendChild(tr);
   }
 }
 $('#filter-exp-category').addEventListener('change', renderLancamentos);
