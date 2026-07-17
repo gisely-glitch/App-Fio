@@ -121,7 +121,7 @@ export function parseAppointmentText(rawText, referenceDate = new Date()) {
 
   // ---- Title cleanup ----
   // Try to find a short label after keywords like "com Dr." / "com" for a nicer title.
-  const withMatch = rawText && rawText.match(/com\s+([A-ZÀ-Ú][\wÀ-ú.]*(\s+[A-ZÀ-Ú][\wÀ-ú.]*)*)/);
+  const withMatch = rawText && rawText.match(/com\s+([A-ZÀ-Ú][\wÀ-ú.()]*(\s+[A-ZÀ-Ú][\wÀ-ú.()]*)*)/);
   if (withMatch) {
     const typeLabel = { exame: 'Exame', consulta: 'Consulta', reuniao: 'Reunião', outro: 'Compromisso' }[result.type];
     result.title = `${typeLabel} com ${withMatch[1]}`.slice(0, 80);

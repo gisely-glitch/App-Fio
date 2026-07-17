@@ -17,6 +17,7 @@ import {
 import { listAllDocuments, statusLabel } from './documents.js';
 import { startNotificationScheduler, onNotificationEvents, requestNotificationPermission } from './notifications.js';
 import { startListening, isVoiceSupported } from './voice.js';
+import { recognizeImageText } from './ocr.js';
 import { consumeSharedPayload } from './share.js';
 import {
   isGoogleConfigured, isGoogleConnected, connectGoogle, disconnectGoogle,
@@ -335,6 +336,30 @@ function initCaptureModal() {
       },
     });
     activeVoiceStop = stop;
+  });
+
+  $('#btn-ocr').addEventListener('click', () => $('#ocr-file-input').click());
+  $('#ocr-file-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    $('#voice-status').textContent = 'Lendo imagem… (pode levar alguns segundos)';
+    try {
+      const text = await recognizeImageText(file, {
+        onProgress: (p) => { $('#voice-status').textContent = `Lendo imagem… ${Math.round(p * 100)}%`; },
+      });
+      if (!text) {
+        $('#voice-status').textContent = 'Não consegui reconhecer texto nessa imagem.';
+        toast('Não encontrei texto legível na imagem — tente colar o texto manualmente.', true);
+        return;
+      }
+      $('#capture-text').value = text;
+      $('#voice-status').textContent = 'Texto lido da imagem — confira os campos abaixo.';
+      interpretCaptureText();
+    } catch (err) {
+      $('#voice-status').textContent = '';
+      toast(err.message, true);
+    }
   });
 
   $('#appt-date').addEventListener('change', checkAndShowConflict);
@@ -680,8 +705,10 @@ $('#input-upload-doc').addEventListener('change', async (e) => {
   const { document: doc, importedExpenses, errors } = await importFinancialDocument(file);
   if (doc.parseStatus === 'parsed') {
     toast(`"${file.name}": ${importedExpenses.length} lançamento(s) importado(s).`);
+  } else if (doc.parseStatus === 'pending_ocr' && errors.length > 0) {
+    toast(`"${file.name}" arquivado — não consegui ler a imagem agora (${errors[0]}). Tente de novo mais tarde.`, true);
   } else if (doc.parseStatus === 'pending_ocr') {
-    toast(`"${file.name}" arquivado — aguardando leitura automática (OCR) em versão futura.`);
+    toast(`"${file.name}" arquivado — leitura automática de PDF ainda não está disponível nesta versão.`);
   } else {
     toast(`"${file.name}" arquivado, mas não consegui extrair lançamentos. ${errors[0] || ''}`, true);
   }

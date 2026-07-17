@@ -144,7 +144,9 @@
       <div class="capture-text-row">
         <textarea id="capture-text" rows="3" placeholder="Ex: consulta com Dr. Paulo sábado às 16h"></textarea>
         <button type="button" id="btn-voice" class="icon-btn icon-btn-voice" aria-label="Ditar por voz">🎤</button>
+        <button type="button" id="btn-ocr" class="icon-btn" aria-label="Ler texto de uma captura de tela">🖼</button>
       </div>
+      <input type="file" id="ocr-file-input" accept="image/*" class="visually-hidden" aria-label="Selecionar captura de tela para leitura automática">
       <p id="voice-status" class="hint" aria-live="polite"></p>
       <button type="button" id="btn-interpret" class="btn btn-secondary btn-small">Interpretar texto</button>
     </div>
