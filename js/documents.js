@@ -39,6 +39,8 @@ export async function listAllDocuments({ from = null, to = null, kind = null } =
     refId: d.id,
     refLabel: d.parseStatus === 'parsed' ? `${d.importedCount} lançamento(s) importado(s)` : statusLabel(d.parseStatus),
     parseStatus: d.parseStatus,
+    ocrError: d.ocrError || null,
+    canRetry: d.parseStatus === 'pending_ocr' && (d.fileType === 'image' || d.fileType === 'pdf'),
   }));
 
   let all = [...appointmentItems, ...financialItems];
@@ -51,7 +53,7 @@ export async function listAllDocuments({ from = null, to = null, kind = null } =
 
 function statusLabel(status) {
   switch (status) {
-    case 'pending_ocr': return 'Arquivado — aguardando leitura automática';
+    case 'pending_ocr': return 'Arquivado — não consegui ler automaticamente ainda';
     case 'unparsed': return 'Arquivado — não foi possível extrair lançamentos';
     case 'manual': return 'Arquivado';
     default: return status;
