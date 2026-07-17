@@ -121,13 +121,51 @@ export function parseAppointmentText(rawText, referenceDate = new Date()) {
 
   // ---- Title cleanup ----
   // Try to find a short label after keywords like "com Dr." / "com" for a nicer title.
-  const withMatch = rawText && rawText.match(/com\s+([A-ZÀ-Ú][\wÀ-ú.]*(\s+[A-ZÀ-Ú][\wÀ-ú.]*)*)/);
+  const withMatch = rawText && rawText.match(/com\s+([A-ZÀ-Ú][\wÀ-ú.()]*(\s+[A-ZÀ-Ú][\wÀ-ú.()]*)*)/);
   if (withMatch) {
     const typeLabel = { exame: 'Exame', consulta: 'Consulta', reuniao: 'Reunião', outro: 'Compromisso' }[result.type];
     result.title = `${typeLabel} com ${withMatch[1]}`.slice(0, 80);
   }
 
+  result.recurrence = parseRecurrenceText(rawText);
+
   return result;
+}
+
+/**
+ * Detects recurrence phrases in pt-BR text: "toda terça e quinta", "todos os
+ * sábados", "todo dia"/"diariamente", "dias úteis"/"de segunda a sexta".
+ * Returns { freq: 'daily'|'weekly', daysOfWeek: [0-6]|null } or null if no
+ * recurrence was mentioned — a single one-off date (e.g. "consulta terça às
+ * 10h", no "toda") correctly returns null here even though the date parser
+ * above still resolves "terça" to a specific upcoming date.
+ */
+export function parseRecurrenceText(rawText) {
+  const flat = stripAccents((rawText || '').toLowerCase());
+
+  if (/dias uteis|de segunda a sexta|de segunda-feira a sexta-feira/.test(flat)) {
+    return { freq: 'weekly', daysOfWeek: [1, 2, 3, 4, 5] };
+  }
+  if (/\btodo(s)?\s+(?:os?\s+)?dias?\b|\bdiariamente\b|\bdiari[ao]\b/.test(flat)) {
+    return { freq: 'daily', daysOfWeek: null };
+  }
+
+  const weekdayNames = 'domingo|segunda|terca|quarta|quinta|sexta|sabado';
+  const prefixRe = new RegExp(`\\btod[ao]s?\\b(?:\\s+(?:os|as))?\\s+((?:(?:${weekdayNames})s?(?:-feira)?s?(?:\\s*(?:,|e)\\s*)?)+)`);
+  const prefixMatch = flat.match(prefixRe);
+  if (prefixMatch) {
+    const dayRe = new RegExp(`(${weekdayNames})s?`, 'g');
+    const daysFound = new Set();
+    let m;
+    while ((m = dayRe.exec(prefixMatch[1])) !== null) {
+      daysFound.add(WEEKDAY_INDEX[m[1]]);
+    }
+    if (daysFound.size > 0) {
+      return { freq: 'weekly', daysOfWeek: [...daysFound].sort((a, b) => a - b) };
+    }
+  }
+
+  return null;
 }
 
 function toISODate(d) {

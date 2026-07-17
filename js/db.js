@@ -4,7 +4,7 @@
 // never loses data between sessions.
 
 const DB_NAME = 'fio-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
   appointments: { keyPath: 'id', indexes: [['datetime', 'datetime'], ['status', 'status'], ['type', 'type']] },
@@ -14,6 +14,11 @@ const STORES = {
   financialDocuments: { keyPath: 'id', indexes: [['uploadedAt', 'uploadedAt']] },
   cards: { keyPath: 'id', indexes: [] },
   emailSuggestions: { keyPath: 'id', indexes: [['status', 'status']] },
+  // One record per recurring appointment series (e.g. "academia toda terça e
+  // quinta"). Individual occurrences are still full, independent records in
+  // `appointments` (own status/attachments/derived task) — this store only
+  // holds the rule plus a generation watermark, see appointments.js.
+  recurrenceSeries: { keyPath: 'id', indexes: [] },
 };
 
 let dbPromise = null;

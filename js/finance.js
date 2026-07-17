@@ -2,7 +2,8 @@
 // card invoice projection, and CSV/XML/PDF/image document import.
 
 import { db, uid } from './db.js';
-import { parseCSV, parseXML } from './parsers.js';
+import { parseCSV, parseXML, parseExpenseText } from './parsers.js';
+import { recognizeImageText } from './ocr.js';
 
 // ---------------------------------------------------------------------------
 // Cards
@@ -187,14 +188,13 @@ function guessFileType(file) {
 }
 
 /**
- * Handles any uploaded financial document. CSV/XML are actually parsed and
- * turned into VariableExpense records immediately. PDF/image are archived
- * with parseStatus 'pending_ocr' — nothing is ever silently dropped; the
- * caller always gets a clear result to show the user.
- *
- * Future (V2): pending_ocr documents can be picked up by a client-side OCR
- * pass (e.g. Tesseract.js for images, PDF.js for text extraction from PDFs)
- * to auto-suggest VariableExpense entries the same way CSV/XML do today.
+ * Handles any uploaded financial document. CSV/XML are parsed directly.
+ * Images are run through client-side OCR (Tesseract.js, see ocr.js) and the
+ * recognized text is fed into the same expense parser used for manual/voice
+ * entry — this is the "future OCR phase" the original design left room for.
+ * PDFs still just archive with parseStatus 'pending_ocr' (text extraction
+ * from PDF needs a different library, e.g. PDF.js — not wired up yet).
+ * Nothing is ever silently dropped; the caller always gets a clear result.
  */
 export async function importFinancialDocument(file) {
   const fileType = guessFileType(file);
@@ -230,7 +230,32 @@ export async function importFinancialDocument(file) {
     })));
     doc.parseStatus = rows.length > 0 ? 'parsed' : 'unparsed';
     doc.importedCount = importedExpenses.length;
-  } else if (fileType === 'pdf' || fileType === 'image') {
+  } else if (fileType === 'image') {
+    try {
+      const text = await recognizeImageText(file);
+      const parsed = text ? parseExpenseText(text) : null;
+      if (parsed?.value) {
+        const expense = await createVariableExpense({
+          desc: parsed.desc.slice(0, 120) || file.name,
+          value: parsed.value,
+          category: parsed.category || 'importado',
+          paymentMethod: parsed.paymentMethod || 'cartao',
+          source: 'ocr_import',
+        });
+        importedExpenses = [expense];
+        doc.parseStatus = 'parsed';
+        doc.importedCount = 1;
+      } else {
+        doc.parseStatus = 'unparsed';
+        errors = ['Consegui ler a imagem, mas não encontrei um valor reconhecível no texto.'];
+      }
+    } catch (e) {
+      // Network/CDN unreachable, decoding failure, etc. — keep it archived
+      // and clearly pending, never lose the upload.
+      doc.parseStatus = 'pending_ocr';
+      errors = [e.message];
+    }
+  } else if (fileType === 'pdf') {
     doc.parseStatus = 'pending_ocr';
   } else {
     doc.parseStatus = 'manual';

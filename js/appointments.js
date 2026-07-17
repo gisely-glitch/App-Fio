@@ -28,6 +28,12 @@ function isoDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function addDays(date, n) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + n);
+  return copy;
+}
+
 /**
  * Checks the given datetime against all existing appointments (except
  * `excludeId`) for conflicts within a ±1h window. Returns the list of
@@ -44,14 +50,7 @@ export async function checkConflicts(datetimeISO, excludeId = null) {
   });
 }
 
-/**
- * Creates a new appointment, checks for conflicts, generates a derived task
- * when applicable, and (best-effort, non-blocking) mirrors it to Google
- * Calendar if the integration is connected.
- */
-export async function createAppointment({ title, type, datetime, source }) {
-  const conflicts = await checkConflicts(datetime);
-
+function buildAppointmentRecord({ title, type, datetime, source, recurrenceGroupId = null }) {
   const appointment = {
     id: uid(),
     title: title || 'Compromisso',
@@ -62,6 +61,7 @@ export async function createAppointment({ title, type, datetime, source }) {
     derivedTask: null,
     attachments: [],
     googleEventId: null,
+    recurrence: recurrenceGroupId ? { groupId: recurrenceGroupId } : null,
     createdAt: new Date().toISOString(),
   };
 
@@ -71,8 +71,11 @@ export async function createAppointment({ title, type, datetime, source }) {
     appointment.derivedTask = { label: taskLabel, done: false, dueDate: isoDate(due) };
   }
 
-  await db.put('appointments', appointment);
+  return appointment;
+}
 
+async function saveAndMirror(appointment) {
+  await db.put('appointments', appointment);
   // Best-effort mirror; failures never block local creation.
   mirrorAppointmentToGoogleCalendar(appointment)
     .then((eventId) => {
@@ -82,8 +85,155 @@ export async function createAppointment({ title, type, datetime, source }) {
       }
     })
     .catch(() => { /* integration not configured/authorized — local data is still safe */ });
+  return appointment;
+}
 
-  return { appointment, conflicts };
+/**
+ * Creates a new appointment, checks for conflicts, generates a derived task
+ * when applicable, and (best-effort, non-blocking) mirrors it to Google
+ * Calendar if the integration is connected.
+ *
+ * Pass `recurrence: { freq: 'daily'|'weekly', daysOfWeek, until }` to create
+ * a repeating series (e.g. "academia toda terça e quinta") instead of a
+ * single appointment — see generateRecurringSeries below. Each occurrence is
+ * still an independent Appointment record (own status/attachments/derived
+ * task), linked only by `recurrence.groupId`; the rule itself lives in the
+ * `recurrenceSeries` store and keeps generating new occurrences on a rolling
+ * window as time passes (see extendRecurringAppointments).
+ */
+export async function createAppointment({ title, type, datetime, source, recurrence = null }) {
+  if (recurrence) {
+    return generateRecurringSeries({ title, type, datetime, source, recurrence });
+  }
+
+  const conflicts = await checkConflicts(datetime);
+  const appointment = await saveAndMirror(buildAppointmentRecord({ title, type, datetime, source }));
+  return { appointment, conflicts, occurrencesCreated: 1, occurrenceConflictCount: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Recurring series
+// ---------------------------------------------------------------------------
+
+const RECURRENCE_WINDOW_DAYS = 56; // ~8 weeks, topped up every time the app loads
+
+function addDaysToISODate(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return isoDate(addDays(new Date(y, m - 1, d), n));
+}
+
+/** All dates in (fromExclusive, toInclusive] matching the series rule, respecting series.until. */
+function computeOccurrenceDates(series, fromExclusiveISO, toInclusiveISO) {
+  const end = series.until && series.until < toInclusiveISO ? series.until : toInclusiveISO;
+  const dates = [];
+  let cur = addDaysToISODate(fromExclusiveISO, 1);
+  while (cur <= end) {
+    const [y, m, d] = cur.split('-').map(Number);
+    const dow = new Date(y, m - 1, d).getDay();
+    if (series.freq === 'daily' || (series.freq === 'weekly' && series.daysOfWeek.includes(dow))) {
+      dates.push(cur);
+    }
+    cur = addDaysToISODate(cur, 1);
+  }
+  return dates;
+}
+
+async function generateRecurringSeries({ title, type, datetime, source, recurrence }) {
+  const [startDate, timeOfDay] = datetime.split('T');
+  const series = {
+    id: uid(),
+    title: title || 'Compromisso',
+    type: type || 'outro',
+    source: source || 'manual',
+    freq: recurrence.freq,
+    daysOfWeek: recurrence.freq === 'weekly' ? (recurrence.daysOfWeek || []) : null,
+    until: recurrence.until || null,
+    timeOfDay,
+    lastGeneratedDate: startDate,
+  };
+
+  const conflicts = await checkConflicts(datetime);
+  const firstOccurrence = buildAppointmentRecord({ title, type, datetime, source, recurrenceGroupId: series.id });
+  await saveAndMirror(firstOccurrence);
+
+  const windowEnd = addDaysToISODate(isoDate(new Date()), RECURRENCE_WINDOW_DAYS);
+  const moreDates = computeOccurrenceDates(series, startDate, windowEnd);
+  let occurrenceConflictCount = 0;
+  for (const date of moreDates) {
+    const occDatetime = `${date}T${timeOfDay}`;
+    const occConflicts = await checkConflicts(occDatetime);
+    if (occConflicts.length > 0) occurrenceConflictCount++;
+    await saveAndMirror(buildAppointmentRecord({ title, type, datetime: occDatetime, source, recurrenceGroupId: series.id }));
+  }
+
+  series.lastGeneratedDate = moreDates.length > 0 ? moreDates[moreDates.length - 1] : startDate;
+  await db.put('recurrenceSeries', series);
+
+  return {
+    appointment: firstOccurrence,
+    conflicts,
+    occurrencesCreated: 1 + moreDates.length,
+    occurrenceConflictCount,
+  };
+}
+
+/**
+ * Tops up every active recurring series so occurrences exist up to ~8 weeks
+ * ahead. Call this on app load — there's no background job, so a series
+ * simply catches up the next time the user opens the app. Safe to call
+ * often: it never re-creates a date it has already generated (advances a
+ * monotonic `lastGeneratedDate` watermark per series), so a single
+ * occurrence the user deleted on purpose is never resurrected.
+ */
+export async function extendRecurringAppointments() {
+  const allSeries = await db.getAll('recurrenceSeries');
+  const today = isoDate(new Date());
+  const windowEnd = addDaysToISODate(today, RECURRENCE_WINDOW_DAYS);
+
+  for (const series of allSeries) {
+    if (series.until && series.until < today) continue; // series has ended
+    if (series.lastGeneratedDate >= windowEnd) continue; // already topped up
+
+    const newDates = computeOccurrenceDates(series, series.lastGeneratedDate, windowEnd);
+    for (const date of newDates) {
+      const occDatetime = `${date}T${series.timeOfDay}`;
+      await saveAndMirror(buildAppointmentRecord({
+        title: series.title, type: series.type, datetime: occDatetime, source: series.source, recurrenceGroupId: series.id,
+      }));
+    }
+    series.lastGeneratedDate = windowEnd;
+    await db.put('recurrenceSeries', series);
+  }
+}
+
+export async function getRecurrenceSeries(groupId) {
+  return db.get('recurrenceSeries', groupId);
+}
+
+/**
+ * Cancels a recurring series from a given occurrence onward: deletes that
+ * occurrence and any already-generated future ones, and freezes the series
+ * (`until` = the day before) so extendRecurringAppointments never generates
+ * past this point again. Occurrences before this date are untouched —
+ * appointments are a permanent record, so history never disappears.
+ */
+export async function cancelRecurrenceFromHere(appointmentId) {
+  const appt = await db.get('appointments', appointmentId);
+  if (!appt?.recurrence) return;
+  const { groupId } = appt.recurrence;
+  const cutoff = appt.datetime.slice(0, 10);
+
+  const all = await db.getAll('appointments');
+  const toDelete = all.filter((a) => a.recurrence?.groupId === groupId && a.datetime.slice(0, 10) >= cutoff);
+  await Promise.all(toDelete.map((a) => deleteAppointment(a.id)));
+
+  const series = await db.get('recurrenceSeries', groupId);
+  if (series) {
+    const dayBefore = addDaysToISODate(cutoff, -1);
+    series.until = series.until && series.until < dayBefore ? series.until : dayBefore;
+    if (series.lastGeneratedDate > dayBefore) series.lastGeneratedDate = dayBefore;
+    await db.put('recurrenceSeries', series);
+  }
 }
 
 export async function updateAppointment(appointment) {

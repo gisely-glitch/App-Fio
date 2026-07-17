@@ -6,6 +6,7 @@ import {
   createAppointment, listAppointments, getAppointment, updateAppointment, deleteAppointment,
   markAttendance, rescheduleAppointment, toggleDerivedTask,
   addAttachment, getAttachmentsForAppointment, deleteAttachment,
+  extendRecurringAppointments, getRecurrenceSeries, cancelRecurrenceFromHere,
 } from './appointments.js';
 import {
   listCards, createCard, deleteCard,
@@ -17,6 +18,7 @@ import {
 import { listAllDocuments, statusLabel } from './documents.js';
 import { startNotificationScheduler, onNotificationEvents, requestNotificationPermission } from './notifications.js';
 import { startListening, isVoiceSupported } from './voice.js';
+import { recognizeImageText } from './ocr.js';
 import { consumeSharedPayload } from './share.js';
 import {
   isGoogleConfigured, isGoogleConnected, connectGoogle, disconnectGoogle,
@@ -72,6 +74,14 @@ function formatDate(iso) {
 const TYPE_LABELS = { consulta: 'Consulta', exame: 'Exame', reuniao: 'Reunião', outro: 'Outro' };
 const STATUS_LABELS = { pendente: 'Pendente', confirmado: 'Confirmado', faltou: 'Faltou' };
 const PAYMENT_LABELS = { pix: 'Pix', dinheiro: 'Dinheiro', debito: 'Débito', cartao: 'Cartão' };
+const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function describeRecurrence(series) {
+  if (!series) return '';
+  if (series.freq === 'daily') return 'Repete diariamente';
+  const days = (series.daysOfWeek || []).map((d) => WEEKDAY_SHORT[d]).join(', ');
+  return `Repete semanalmente (${days})`;
+}
 
 // ---------------------------------------------------------------------------
 // Tab navigation
@@ -140,6 +150,7 @@ async function renderAppointments() {
         <span class="badge badge-status-${appt.status}">${isPastPending ? 'Aguardando confirmação' : STATUS_LABELS[appt.status]}</span>
         ${appt.derivedTask ? `<span class="badge ${appt.derivedTask.done ? 'badge-task-done' : 'badge-task-open'}">${escapeHtml(appt.derivedTask.label)}</span>` : ''}
         ${appt.attachments?.length ? `<span class="badge">📎 ${appt.attachments.length}</span>` : ''}
+        ${appt.recurrence ? `<span class="badge" title="Faz parte de uma série recorrente">🔁</span>` : ''}
       </div>`;
     card.addEventListener('click', () => openAppointmentDetail(appt.id));
 
@@ -171,9 +182,11 @@ async function openAppointmentDetail(id) {
   $('#appt-detail-title').textContent = appt.title;
 
   const isPastPending = appt.status === 'pendente' && new Date(appt.datetime).getTime() < Date.now();
+  const series = appt.recurrence ? await getRecurrenceSeries(appt.recurrence.groupId) : null;
   $('#appt-detail-body').innerHTML = `
     <p><strong>${formatDateTime(appt.datetime)}</strong></p>
     <p class="hint">${TYPE_LABELS[appt.type]} · origem: ${appt.source} · status: ${isPastPending ? 'aguardando confirmação' : STATUS_LABELS[appt.status]}</p>
+    ${series ? `<p class="hint">🔁 ${describeRecurrence(series)}${series.until ? ` até ${formatDate(series.until)}` : ''}</p>` : ''}
     ${appt.derivedTask ? `
       <div class="field">
         <label><input type="checkbox" id="detail-task-checkbox" ${appt.derivedTask.done ? 'checked' : ''} style="width:auto;display:inline-block;margin-right:6px;">
@@ -193,6 +206,7 @@ async function openAppointmentDetail(id) {
 
   await renderAttachmentsList(id);
 
+  $('#btn-delete-appt').textContent = series ? 'Excluir somente esta ocorrência' : 'Excluir compromisso';
   $('#btn-delete-appt').onclick = async () => {
     if (!confirm('Excluir este compromisso e seus anexos? Esta ação não pode ser desfeita.')) return;
     await deleteAppointment(id);
@@ -200,6 +214,17 @@ async function openAppointmentDetail(id) {
     toast('Compromisso excluído.');
     renderAppointments();
   };
+
+  $('#btn-cancel-recurrence').hidden = !series;
+  if (series) {
+    $('#btn-cancel-recurrence').onclick = async () => {
+      if (!confirm('Cancelar esta e todas as ocorrências futuras desta série? As ocorrências passadas continuam no histórico.')) return;
+      await cancelRecurrenceFromHere(id);
+      closeModal('modal-appt-detail');
+      toast('Série cancelada a partir desta ocorrência.');
+      renderAppointments();
+    };
+  }
 
   openModal('modal-appt-detail');
 }
@@ -337,8 +362,39 @@ function initCaptureModal() {
     activeVoiceStop = stop;
   });
 
+  $('#btn-ocr').addEventListener('click', () => $('#ocr-file-input').click());
+  $('#ocr-file-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    $('#voice-status').textContent = 'Lendo imagem… (pode levar alguns segundos)';
+    try {
+      const text = await recognizeImageText(file, {
+        onProgress: (p) => { $('#voice-status').textContent = `Lendo imagem… ${Math.round(p * 100)}%`; },
+      });
+      if (!text) {
+        $('#voice-status').textContent = 'Não consegui reconhecer texto nessa imagem.';
+        toast('Não encontrei texto legível na imagem — tente colar o texto manualmente.', true);
+        return;
+      }
+      $('#capture-text').value = text;
+      $('#voice-status').textContent = 'Texto lido da imagem — confira os campos abaixo.';
+      interpretCaptureText();
+    } catch (err) {
+      $('#voice-status').textContent = '';
+      toast(err.message, true);
+    }
+  });
+
   $('#appt-date').addEventListener('change', checkAndShowConflict);
   $('#appt-time').addEventListener('change', checkAndShowConflict);
+
+  $('#appt-recurring').addEventListener('change', () => {
+    $('#recurrence-fields').hidden = !$('#appt-recurring').checked;
+  });
+  $('#appt-recur-freq').addEventListener('change', () => {
+    $('#recur-weekdays-field').hidden = $('#appt-recur-freq').value !== 'weekly';
+  });
 
   $('#exp-payment').addEventListener('change', () => {
     $('#exp-card-field').hidden = $('#exp-payment').value !== 'cartao';
@@ -360,6 +416,12 @@ function resetCaptureForm() {
   $('#appt-date').value = now.toISOString().slice(0, 10);
   $('#appt-time').value = '09:00';
   $('#conflict-warning').hidden = true;
+  $('#appt-recurring').checked = false;
+  $('#recurrence-fields').hidden = true;
+  $('#appt-recur-freq').value = 'weekly';
+  $('#recur-weekdays-field').hidden = false;
+  $('#appt-recur-until').value = '';
+  $$('.recur-day').forEach((cb) => { cb.checked = false; });
   $('#exp-desc').value = '';
   $('#exp-value').value = '';
   $('#exp-category').value = '';
@@ -381,6 +443,15 @@ function interpretCaptureText() {
     if (parsed.time) $('#appt-time').value = parsed.time;
     if (!parsed.matchedDate || !parsed.matchedTime) {
       toast('Não consegui identificar tudo automaticamente — confira data e hora.', true);
+    }
+    if (parsed.recurrence) {
+      $('#appt-recurring').checked = true;
+      $('#recurrence-fields').hidden = false;
+      $('#appt-recur-freq').value = parsed.recurrence.freq;
+      $('#recur-weekdays-field').hidden = parsed.recurrence.freq !== 'weekly';
+      $$('.recur-day').forEach((cb) => {
+        cb.checked = parsed.recurrence.freq === 'weekly' && parsed.recurrence.daysOfWeek.includes(Number(cb.value));
+      });
     }
     checkAndShowConflict();
   } else {
@@ -417,11 +488,29 @@ async function submitCapture() {
     const time = $('#appt-time').value;
     if (!title || !date || !time) { toast('Preencha título, data e hora.', true); return; }
     const source = window.__fioShareSource || 'manual';
-    const { conflicts } = await createAppointment({
-      title, type: $('#appt-type').value, datetime: `${date}T${time}`, source,
+
+    let recurrence = null;
+    if ($('#appt-recurring').checked) {
+      const freq = $('#appt-recur-freq').value;
+      const daysOfWeek = $$('.recur-day').filter((cb) => cb.checked).map((cb) => Number(cb.value));
+      if (freq === 'weekly' && daysOfWeek.length === 0) {
+        toast('Escolha ao menos um dia da semana para a repetição.', true);
+        return;
+      }
+      recurrence = { freq, daysOfWeek, until: $('#appt-recur-until').value || null };
+    }
+
+    const { conflicts, occurrencesCreated, occurrenceConflictCount } = await createAppointment({
+      title, type: $('#appt-type').value, datetime: `${date}T${time}`, source, recurrence,
     });
     closeModal('modal-capture');
-    toast(conflicts.length ? 'Compromisso salvo (havia conflito de horário).' : 'Compromisso salvo.');
+    if (occurrencesCreated > 1) {
+      const conflictNote = (conflicts.length > 0 || occurrenceConflictCount > 0)
+        ? ` (${conflicts.length + occurrenceConflictCount} com conflito de horário)` : '';
+      toast(`Série criada: ${occurrencesCreated} ocorrências${conflictNote}.`);
+    } else {
+      toast(conflicts.length ? 'Compromisso salvo (havia conflito de horário).' : 'Compromisso salvo.');
+    }
     renderAppointments();
   } else {
     const value = parseFloat($('#exp-value').value);
@@ -680,8 +769,10 @@ $('#input-upload-doc').addEventListener('change', async (e) => {
   const { document: doc, importedExpenses, errors } = await importFinancialDocument(file);
   if (doc.parseStatus === 'parsed') {
     toast(`"${file.name}": ${importedExpenses.length} lançamento(s) importado(s).`);
+  } else if (doc.parseStatus === 'pending_ocr' && errors.length > 0) {
+    toast(`"${file.name}" arquivado — não consegui ler a imagem agora (${errors[0]}). Tente de novo mais tarde.`, true);
   } else if (doc.parseStatus === 'pending_ocr') {
-    toast(`"${file.name}" arquivado — aguardando leitura automática (OCR) em versão futura.`);
+    toast(`"${file.name}" arquivado — leitura automática de PDF ainda não está disponível nesta versão.`);
   } else {
     toast(`"${file.name}" arquivado, mas não consegui extrair lançamentos. ${errors[0] || ''}`, true);
   }
@@ -848,6 +939,7 @@ async function init() {
   registerServiceWorker();
   initNotifications();
 
+  await extendRecurringAppointments();
   await renderAppointments();
   handleIncomingShare();
 }
