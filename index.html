@@ -180,6 +180,40 @@
         </div>
       </div>
       <p id="conflict-warning" class="warning-banner" role="alert" hidden></p>
+
+      <div class="field">
+        <label class="checkbox-label">
+          <input type="checkbox" id="appt-recurring">
+          Repetir (ex: academia toda terça e quinta)
+        </label>
+      </div>
+      <div id="recurrence-fields" hidden>
+        <div class="field-row">
+          <div class="field">
+            <label for="appt-recur-freq">Frequência</label>
+            <select id="appt-recur-freq">
+              <option value="weekly">Semanalmente</option>
+              <option value="daily">Diariamente</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="appt-recur-until">Repetir até (opcional)</label>
+            <input type="date" id="appt-recur-until">
+          </div>
+        </div>
+        <div class="field" id="recur-weekdays-field">
+          <span class="hint">Dias da semana</span>
+          <div class="weekday-picker" role="group" aria-label="Dias da semana da repetição">
+            <label class="weekday-chip"><input type="checkbox" value="0" class="recur-day"><span>Dom</span></label>
+            <label class="weekday-chip"><input type="checkbox" value="1" class="recur-day"><span>Seg</span></label>
+            <label class="weekday-chip"><input type="checkbox" value="2" class="recur-day"><span>Ter</span></label>
+            <label class="weekday-chip"><input type="checkbox" value="3" class="recur-day"><span>Qua</span></label>
+            <label class="weekday-chip"><input type="checkbox" value="4" class="recur-day"><span>Qui</span></label>
+            <label class="weekday-chip"><input type="checkbox" value="5" class="recur-day"><span>Sex</span></label>
+            <label class="weekday-chip"><input type="checkbox" value="6" class="recur-day"><span>Sáb</span></label>
+          </div>
+        </div>
+      </div>
     </fieldset>
 
     <!-- Gasto fields -->
@@ -269,7 +303,8 @@
     <input type="file" id="appt-attach-input" accept=".pdf,image/*">
   </div>
   <ul id="appt-attachments-list" class="list list-compact"></ul>
-  <div class="modal-actions">
+  <div class="modal-actions modal-actions-split">
+    <button type="button" id="btn-cancel-recurrence" class="btn btn-danger-text" hidden>Cancelar esta e as futuras</button>
     <button type="button" id="btn-delete-appt" class="btn btn-danger-text">Excluir compromisso</button>
   </div>
 </dialog>
