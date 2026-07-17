@@ -208,7 +208,18 @@ export function parseExpenseText(rawText) {
   const text = stripAccents((rawText || '').toLowerCase());
   const result = { desc: rawText ? rawText.trim() : '', value: null, category: null, paymentMethod: null };
 
-  const valueMatch = (rawText || '').match(/r?\$?\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)/i);
+  // Priority matters: a document can contain other digit sequences that
+  // aren't the amount at all — most commonly a card reference like "final
+  // 4321", which used to get grabbed as if it were "R$ 432,00" whenever it
+  // appeared before the real value in the text. So: prefer an explicit
+  // "R$"-prefixed number, then any plain decimal-comma amount ("87,30"),
+  // and only fall back to a bare integer (no currency signal at all) when
+  // nothing else matches — that fallback exists for simple voice/manual
+  // input like "gastei 50 no mercado" where there's genuinely no "R$".
+  const prefixedMatch = (rawText || '').match(/r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/i);
+  const decimalMatch = (rawText || '').match(/(\d{1,3}(?:\.\d{3})*,\d{2})/);
+  const bareMatch = (rawText || '').match(/\b(\d{1,3})\b/);
+  const valueMatch = prefixedMatch || decimalMatch || bareMatch;
   if (valueMatch) {
     let numStr = valueMatch[1].replace(/\./g, '').replace(',', '.');
     // handle plain "50" without decimals correctly (no comma/dot means whole reais)

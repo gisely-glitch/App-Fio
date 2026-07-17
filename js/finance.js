@@ -14,14 +14,56 @@ export async function listCards() {
   return db.getAll('cards');
 }
 
-export async function createCard({ name, closingDay, dueDay }) {
-  const card = { id: uid(), name, closingDay: closingDay || null, dueDay: dueDay || null };
+export async function createCard({ name, closingDay, dueDay, lastFourDigits }) {
+  const card = {
+    id: uid(),
+    name,
+    closingDay: closingDay || null,
+    dueDay: dueDay || null,
+    lastFourDigits: lastFourDigits ? String(lastFourDigits).replace(/\D/g, '').slice(0, 4) || null : null,
+  };
+  await db.put('cards', card);
+  return card;
+}
+
+export async function updateCard(card) {
   await db.put('cards', card);
   return card;
 }
 
 export async function deleteCard(id) {
   return db.delete('cards', id);
+}
+
+/**
+ * Looks for a card reference in imported text ("final 1234", "•••• 1234",
+ * "cartão 1234", a bare 4-digit group near the word "cartão", etc.) and
+ * matches it against registered cards' last-4-digits — so a statement/
+ * invoice import can auto-route to the right card instead of always
+ * landing unassigned. Returns the matching card's id, or null.
+ */
+export async function matchCardByDigits(text) {
+  if (!text) return null;
+  const cards = await listCards();
+  const withDigits = cards.filter((c) => c.lastFourDigits);
+  if (withDigits.length === 0) return null;
+
+  // Prefer digit groups that appear near obvious card-reference language,
+  // but fall back to any standalone 4-digit group masked by bullets/asterisks
+  // (a very common way card numbers are partially shown: "•••• 1234").
+  const contextRe = /(?:final|terminad[ao] em|cart[ãa]o)\D{0,12}(\d{4})\b/gi;
+  const maskedRe = /[•*x]{2,}\s*(\d{4})\b/gi;
+
+  const candidates = [
+    ...[...text.matchAll(contextRe)].map((m) => m[1]),
+    ...[...text.matchAll(maskedRe)].map((m) => m[1]),
+  ];
+
+  for (const digits of candidates) {
+    const match = withDigits.find((c) => c.lastFourDigits === digits);
+    if (match) return match.id;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,10 +247,12 @@ function guessFileType(file) {
  * look like a statement in the first place (an actual single receipt).
  */
 async function importExpenseFromText(text, source) {
+  const cardId = await matchCardByDigits(text);
+
   const statementRows = text ? parseStatementText(text) : [];
   if (statementRows.length > 0) {
     const importedExpenses = await Promise.all(statementRows.map((r) => createVariableExpense({
-      desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', source,
+      desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', cardId, source,
     })));
     return { parseStatus: 'parsed', importedExpenses, errors: [] };
   }
@@ -228,6 +272,7 @@ async function importExpenseFromText(text, source) {
       value: parsed.value,
       category: parsed.category || 'importado',
       paymentMethod: parsed.paymentMethod || 'cartao',
+      cardId,
       source,
     });
     return { parseStatus: 'parsed', importedExpenses: [expense], errors: [] };
@@ -288,8 +333,9 @@ export async function importFinancialDocument(file) {
     const text = await file.text();
     const { rows, errors: csvErrors } = parseCSV(text);
     errors = csvErrors;
+    const cardId = await matchCardByDigits(text);
     importedExpenses = await Promise.all(rows.map((r) => createVariableExpense({
-      desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', source: 'csv_import',
+      desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', cardId, source: 'csv_import',
     })));
     doc.parseStatus = rows.length > 0 ? 'parsed' : (errors.length > 0 ? 'unparsed' : 'parsed');
     doc.importedCount = importedExpenses.length;
@@ -297,8 +343,9 @@ export async function importFinancialDocument(file) {
     const text = await file.text();
     const { rows, errors: xmlErrors } = parseXML(text);
     errors = xmlErrors;
+    const cardId = await matchCardByDigits(text);
     importedExpenses = await Promise.all(rows.map((r) => createVariableExpense({
-      desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', source: 'xml_import',
+      desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', cardId, source: 'xml_import',
     })));
     doc.parseStatus = rows.length > 0 ? 'parsed' : 'unparsed';
     doc.importedCount = importedExpenses.length;

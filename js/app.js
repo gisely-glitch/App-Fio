@@ -9,7 +9,7 @@ import {
   extendRecurringAppointments, getRecurrenceSeries, cancelRecurrenceFromHere,
 } from './appointments.js';
 import {
-  listCards, createCard, deleteCard,
+  listCards, createCard, updateCard, deleteCard,
   listFixedExpenses, createFixedExpense, updateFixedExpense, deleteFixedExpense,
   listVariableExpenses, createVariableExpense, deleteVariableExpense,
   consolidatedMonth, projectAllCardInvoices,
@@ -611,16 +611,22 @@ async function renderLancamentos() {
     + categories.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   $('#filter-exp-category').value = currentSelection;
 
+  const cards = await listCards();
+  const cardsById = new Map(cards.map((c) => [c.id, c]));
+
   const list = $('#variable-expense-list');
   list.innerHTML = '';
   $('#expense-empty').hidden = items.length > 0;
   for (const exp of items) {
     const li = document.createElement('li');
     li.className = 'list-item';
+    const cardLabel = exp.paymentMethod === 'cartao'
+      ? ` (${exp.cardId ? escapeHtml(cardsById.get(exp.cardId)?.name || '?') : 'sem cartão definido'})`
+      : '';
     li.innerHTML = `
       <div class="list-item-main">
         <div class="list-item-title">${escapeHtml(exp.desc)}</div>
-        <div class="list-item-sub">${formatDate(exp.date)} · ${exp.category} · ${PAYMENT_LABELS[exp.paymentMethod] || exp.paymentMethod}</div>
+        <div class="list-item-sub">${formatDate(exp.date)} · ${exp.category} · ${PAYMENT_LABELS[exp.paymentMethod] || exp.paymentMethod}${cardLabel}</div>
       </div>
       <div class="list-item-value">${formatCurrency(exp.value)}</div>
       <div class="list-item-actions"><button type="button" class="icon-btn" aria-label="Excluir lançamento">🗑</button></div>`;
@@ -661,20 +667,26 @@ async function renderCartoes() {
   for (const card of items) {
     const li = document.createElement('li');
     li.className = 'list-item';
+    const digits = card.lastFourDigits ? ` · •••• ${escapeHtml(card.lastFourDigits)}` : '';
     li.innerHTML = `
       <div class="list-item-main">
         <div class="list-item-title">${escapeHtml(card.name)}</div>
-        <div class="list-item-sub">Fecha dia ${card.closingDay || '—'} · vence dia ${card.dueDay || '—'}</div>
-      </div>
-      <div class="list-item-actions"><button type="button" class="icon-btn" aria-label="Excluir cartão">🗑</button></div>`;
-    li.querySelector('button').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm(`Excluir o cartão "${card.name}"?`)) return;
-      await deleteCard(card.id);
-      renderFinance();
-    });
+        <div class="list-item-sub">Fecha dia ${card.closingDay || '—'} · vence dia ${card.dueDay || '—'}${digits}</div>
+      </div>`;
+    li.addEventListener('click', () => openCardModal(card));
     list.appendChild(li);
   }
+}
+
+let editingCardId = null;
+function openCardModal(card = null) {
+  editingCardId = card ? card.id : null;
+  $('#card-name').value = card?.name || '';
+  $('#card-closing').value = card?.closingDay ?? '';
+  $('#card-due').value = card?.dueDay ?? '';
+  $('#card-last4').value = card?.lastFourDigits || '';
+  $('#btn-delete-card').hidden = !card;
+  openModal('modal-card');
 }
 
 let editingFixedId = null;
@@ -719,23 +731,32 @@ $('#btn-delete-fixed').addEventListener('click', async () => {
   renderFinance();
 });
 
-$('#btn-add-card').addEventListener('click', () => {
-  $('#card-name').value = '';
-  $('#card-closing').value = '';
-  $('#card-due').value = '';
-  openModal('modal-card');
-});
+$('#btn-add-card').addEventListener('click', () => openCardModal());
 $('#form-card').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $('#card-name').value.trim();
   if (!name) { toast('Informe o nome do cartão.', true); return; }
-  await createCard({
+  const data = {
     name,
     closingDay: $('#card-closing').value ? parseInt($('#card-closing').value, 10) : null,
     dueDay: $('#card-due').value ? parseInt($('#card-due').value, 10) : null,
-  });
+    lastFourDigits: $('#card-last4').value.trim() || null,
+  };
+  if (editingCardId) {
+    await updateCard({ id: editingCardId, ...data });
+  } else {
+    await createCard(data);
+  }
   closeModal('modal-card');
-  toast('Cartão adicionado.');
+  toast('Cartão salvo.');
+  renderFinance();
+});
+$('#btn-delete-card').addEventListener('click', async () => {
+  if (!editingCardId) return;
+  if (!confirm('Excluir este cartão?')) return;
+  await deleteCard(editingCardId);
+  closeModal('modal-card');
+  toast('Cartão excluído.');
   renderFinance();
 });
 

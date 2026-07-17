@@ -398,7 +398,13 @@
         <input type="number" id="card-due" min="1" max="31">
       </div>
     </div>
+    <div class="field">
+      <label for="card-last4">Últimos 4 dígitos (opcional)</label>
+      <input type="text" id="card-last4" inputmode="numeric" maxlength="4" pattern="\d{4}" placeholder="1234">
+      <p class="hint">Ajuda o app a reconhecer sozinho qual cartão é ao importar prints e PDFs de fatura/extrato.</p>
+    </div>
     <div class="modal-actions">
+      <button type="button" id="btn-delete-card" class="btn btn-danger-text" hidden>Excluir</button>
       <button type="button" class="btn btn-text" data-close-modal>Cancelar</button>
       <button type="submit" class="btn btn-primary">Salvar</button>
     </div>
