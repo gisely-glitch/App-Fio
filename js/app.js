@@ -13,7 +13,7 @@ import {
   listFixedExpenses, createFixedExpense, updateFixedExpense, deleteFixedExpense,
   listVariableExpenses, createVariableExpense, deleteVariableExpense,
   consolidatedMonth, projectAllCardInvoices,
-  importFinancialDocument, retryDocumentImport,
+  importFinancialDocument, retryDocumentImport, deleteFinancialDocument,
 } from './finance.js';
 import { listAllDocuments, statusLabel } from './documents.js';
 import { startNotificationScheduler, onNotificationEvents, requestNotificationPermission } from './notifications.js';
@@ -758,9 +758,20 @@ async function renderDocuments() {
         <div class="list-item-sub">${formatDate(doc.date)} · ${doc.kind === 'appointment' ? 'compromisso' : 'financeiro'} · ${escapeHtml(doc.refLabel)}</div>
         ${doc.ocrError ? `<div class="list-item-sub">${escapeHtml(doc.ocrError)}</div>` : ''}
       </div>
-      ${doc.canRetry ? `<div class="list-item-actions"><button type="button" class="btn btn-small btn-secondary" data-retry-doc="${doc.refId}">Tentar de novo</button></div>` : ''}`;
+      <div class="list-item-actions">
+        ${doc.canRetry ? `<button type="button" class="btn btn-small btn-secondary" data-retry-doc="${doc.refId}">Tentar de novo</button>` : ''}
+        ${doc.kind === 'financial' ? `<button type="button" class="icon-btn" data-delete-doc="${doc.id}" aria-label="Excluir documento">🗑</button>` : ''}
+      </div>`;
     list.appendChild(li);
   }
+  $$('[data-delete-doc]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Excluir este documento? Se algum lançamento já foi importado a partir dele, o lançamento continua existindo — apague-o separadamente em Financeiro > Lançamentos, se quiser.')) return;
+      await deleteFinancialDocument(btn.dataset.deleteDoc);
+      toast('Documento excluído.');
+      renderDocuments();
+    });
+  });
   $$('[data-retry-doc]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
