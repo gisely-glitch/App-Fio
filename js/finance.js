@@ -2,7 +2,7 @@
 // card invoice projection, and CSV/XML/PDF/image document import.
 
 import { db, uid } from './db.js';
-import { parseCSV, parseXML, parseExpenseText } from './parsers.js';
+import { parseCSV, parseXML, parseExpenseText, parseStatementText } from './parsers.js';
 import { recognizeImageText } from './ocr.js';
 import { extractPdfText } from './pdfText.js';
 
@@ -189,12 +189,27 @@ function guessFileType(file) {
 }
 
 /**
- * Turns recognized text (from OCR or PDF text extraction) into a
- * VariableExpense if a value can be found in it. Shared by the image and
- * PDF branches of importFinancialDocument below — same parser, same
- * "never silently drop it" contract either way.
+ * Turns recognized text (from OCR or PDF text extraction) into one or more
+ * VariableExpense records. Shared by the image and PDF branches of
+ * importFinancialDocument below — same parsers, same "never silently drop
+ * it" contract either way.
+ *
+ * Tries statement mode first: a photo of a bank/wallet extract has several
+ * transaction rows, and grabbing just the first number in the whole blob
+ * (the single-receipt heuristic) produces a wrong, meaningless import — it
+ * did exactly that on a real user statement. parseStatementText only
+ * returns rows when it finds 2+ clear (date + value) lines, so a normal
+ * single receipt still falls through to the simple single-value parser.
  */
 async function importExpenseFromText(text, source) {
+  const statementRows = text ? parseStatementText(text) : [];
+  if (statementRows.length > 0) {
+    const importedExpenses = await Promise.all(statementRows.map((r) => createVariableExpense({
+      desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', source,
+    })));
+    return { parseStatus: 'parsed', importedExpenses, errors: [] };
+  }
+
   const parsed = text ? parseExpenseText(text) : null;
   if (parsed?.value) {
     const expense = await createVariableExpense({

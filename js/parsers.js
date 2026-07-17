@@ -233,6 +233,65 @@ export function parseExpenseText(rawText) {
 }
 
 // ---------------------------------------------------------------------------
+// Statement-style OCR text — a photo/screenshot of a bank/wallet extract
+// with several rows (date, description, value, running balance), as opposed
+// to a single receipt/confirmation. parseExpenseText above only ever grabs
+// the *first* number it sees in the whole blob, which silently produces a
+// wrong, meaningless import when the text actually contains many
+// transactions — this scans line by line instead and only extracts a
+// transaction where a date AND a currency value clearly appear together on
+// the same line, skipping anything ambiguous rather than guessing.
+// ---------------------------------------------------------------------------
+
+const STATEMENT_DATE_RE = /\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/;
+const STATEMENT_VALUE_RE = /-?\s?r?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/gi;
+
+/**
+ * Extracts one row per line that has both a date and a currency value.
+ * Only negative values (money going out) become rows — this app tracks
+ * despesas, not income, so a statement's "Rendimentos"/"Entradas" lines are
+ * intentionally skipped, not misfiled as expenses.
+ * Returns [] if the text doesn't look like a multi-transaction statement
+ * (fewer than 2 usable rows) so callers can fall back to the single-value
+ * parser used for simple receipts.
+ */
+export function parseStatementText(rawText) {
+  const lines = (rawText || '').split(/\r?\n+/).map((l) => l.trim()).filter(Boolean);
+  const rows = [];
+
+  for (const line of lines) {
+    const dateMatch = line.match(STATEMENT_DATE_RE);
+    if (!dateMatch) continue;
+
+    const valueTokens = line.match(STATEMENT_VALUE_RE);
+    if (!valueTokens || valueTokens.length === 0) continue;
+
+    // A row is typically "... Valor Saldo" — the transaction amount comes
+    // before the running balance, so prefer the first token when there's
+    // more than one currency-looking number on the line.
+    const raw = valueTokens[0];
+    const isNegative = raw.includes('-');
+    const numeric = parseFloat(raw.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+    if (isNaN(numeric) || numeric === 0 || !isNegative) continue; // skip income/zero/unparseable
+
+    const day = dateMatch[1].padStart(2, '0');
+    const month = dateMatch[2].padStart(2, '0');
+    const year = dateMatch[3].length === 2 ? `20${dateMatch[3]}` : dateMatch[3];
+
+    const afterDate = line.slice(line.indexOf(dateMatch[0]) + dateMatch[0].length);
+    const desc = afterDate.split(raw)[0]
+      .replace(/\d{5,}/g, '') // strip long operation/reference IDs
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80) || 'Transação';
+
+    rows.push({ desc, value: Math.abs(numeric), date: `${year}-${month}-${day}` });
+  }
+
+  return rows.length >= 2 ? rows : [];
+}
+
+// ---------------------------------------------------------------------------
 // CSV import — detects delimiter, maps pt-BR header variants, returns rows.
 // ---------------------------------------------------------------------------
 
