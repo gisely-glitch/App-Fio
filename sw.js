@@ -3,7 +3,7 @@
 // is required for it to work), a small offline app-shell cache, and relays
 // local notification clicks back to focus the app.
 
-const CACHE_NAME = 'fio-cache-v3';
+const CACHE_NAME = 'fio-cache-v4';
 const APP_SHELL = [
   './',
   './index.html',
@@ -19,6 +19,7 @@ const APP_SHELL = [
   './js/notifications.js',
   './js/voice.js',
   './js/ocr.js',
+  './js/pdfText.js',
   './js/share.js',
   './js/integrations/google.js',
   './js/integrations/gmail.js',

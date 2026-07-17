@@ -13,7 +13,7 @@ import {
   listFixedExpenses, createFixedExpense, updateFixedExpense, deleteFixedExpense,
   listVariableExpenses, createVariableExpense, deleteVariableExpense,
   consolidatedMonth, projectAllCardInvoices,
-  importFinancialDocument,
+  importFinancialDocument, retryDocumentImport,
 } from './finance.js';
 import { listAllDocuments, statusLabel } from './documents.js';
 import { startNotificationScheduler, onNotificationEvents, requestNotificationPermission } from './notifications.js';
@@ -756,9 +756,27 @@ async function renderDocuments() {
       <div class="list-item-main">
         <div class="list-item-title">${escapeHtml(doc.name)}</div>
         <div class="list-item-sub">${formatDate(doc.date)} · ${doc.kind === 'appointment' ? 'compromisso' : 'financeiro'} · ${escapeHtml(doc.refLabel)}</div>
-      </div>`;
+        ${doc.ocrError ? `<div class="list-item-sub">${escapeHtml(doc.ocrError)}</div>` : ''}
+      </div>
+      ${doc.canRetry ? `<div class="list-item-actions"><button type="button" class="btn btn-small btn-secondary" data-retry-doc="${doc.refId}">Tentar de novo</button></div>` : ''}`;
     list.appendChild(li);
   }
+  $$('[data-retry-doc]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Lendo…';
+      const result = await retryDocumentImport(btn.dataset.retryDoc);
+      if (result?.document.parseStatus === 'parsed') {
+        toast(`${result.importedExpenses.length} lançamento(s) importado(s).`);
+      } else if (result?.document.parseStatus === 'unparsed') {
+        toast('Consegui ler agora, mas não encontrei um valor reconhecível.', true);
+      } else {
+        toast(`Ainda não consegui ler (${result?.errors[0] || 'erro desconhecido'}).`, true);
+      }
+      renderDocuments();
+      renderFinance();
+    });
+  });
 }
 $('#filter-doc-kind').addEventListener('change', renderDocuments);
 
@@ -769,10 +787,8 @@ $('#input-upload-doc').addEventListener('change', async (e) => {
   const { document: doc, importedExpenses, errors } = await importFinancialDocument(file);
   if (doc.parseStatus === 'parsed') {
     toast(`"${file.name}": ${importedExpenses.length} lançamento(s) importado(s).`);
-  } else if (doc.parseStatus === 'pending_ocr' && errors.length > 0) {
-    toast(`"${file.name}" arquivado — não consegui ler a imagem agora (${errors[0]}). Tente de novo mais tarde.`, true);
   } else if (doc.parseStatus === 'pending_ocr') {
-    toast(`"${file.name}" arquivado — leitura automática de PDF ainda não está disponível nesta versão.`);
+    toast(`"${file.name}" arquivado — não consegui ler agora (${errors[0]}). Tente de novo mais tarde.`, true);
   } else {
     toast(`"${file.name}" arquivado, mas não consegui extrair lançamentos. ${errors[0] || ''}`, true);
   }
@@ -921,11 +937,32 @@ function initNotifications() {
 // ---------------------------------------------------------------------------
 
 function registerServiceWorker() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').catch((err) => {
+  if (!('serviceWorker' in navigator)) return;
+
+  // iOS home-screen PWAs are notoriously slow/unreliable about noticing a
+  // new service worker on their own (no background update checks the way a
+  // regular browser tab gets) — this is what left users stuck running old
+  // cached JS after a deploy. Force a check on every launch, and once a new
+  // worker actually takes over, reload once so the fresh code is in effect
+  // immediately instead of only on the *next* launch.
+  //
+  // Guarded by `hadController`: on a brand-new install there is no previous
+  // controller, so claiming clients for the first time also fires
+  // 'controllerchange' — without this guard every first-ever visit would
+  // reload itself immediately, which is pointless and jarring.
+  const hadController = !!navigator.serviceWorker.controller;
+  let refreshedAlready = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || refreshedAlready) return;
+    refreshedAlready = true;
+    window.location.reload();
+  });
+
+  navigator.serviceWorker.register('./sw.js')
+    .then((registration) => registration.update().catch(() => {}))
+    .catch((err) => {
       console.warn('[Fio] Falha ao registrar service worker:', err);
     });
-  }
 }
 
 // ---------------------------------------------------------------------------

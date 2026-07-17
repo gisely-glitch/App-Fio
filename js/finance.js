@@ -4,6 +4,7 @@
 import { db, uid } from './db.js';
 import { parseCSV, parseXML, parseExpenseText } from './parsers.js';
 import { recognizeImageText } from './ocr.js';
+import { extractPdfText } from './pdfText.js';
 
 // ---------------------------------------------------------------------------
 // Cards
@@ -188,14 +189,58 @@ function guessFileType(file) {
 }
 
 /**
+ * Turns recognized text (from OCR or PDF text extraction) into a
+ * VariableExpense if a value can be found in it. Shared by the image and
+ * PDF branches of importFinancialDocument below — same parser, same
+ * "never silently drop it" contract either way.
+ */
+async function importExpenseFromText(text, source) {
+  const parsed = text ? parseExpenseText(text) : null;
+  if (parsed?.value) {
+    const expense = await createVariableExpense({
+      desc: parsed.desc.slice(0, 120) || 'Importado',
+      value: parsed.value,
+      category: parsed.category || 'importado',
+      paymentMethod: parsed.paymentMethod || 'cartao',
+      source,
+    });
+    return { parseStatus: 'parsed', importedExpenses: [expense], errors: [] };
+  }
+  return {
+    parseStatus: 'unparsed',
+    importedExpenses: [],
+    errors: ['Consegui ler o arquivo, mas não encontrei um valor reconhecível no texto.'],
+  };
+}
+
+/**
  * Handles any uploaded financial document. CSV/XML are parsed directly.
- * Images are run through client-side OCR (Tesseract.js, see ocr.js) and the
- * recognized text is fed into the same expense parser used for manual/voice
- * entry — this is the "future OCR phase" the original design left room for.
- * PDFs still just archive with parseStatus 'pending_ocr' (text extraction
- * from PDF needs a different library, e.g. PDF.js — not wired up yet).
+ * Images go through client-side OCR (Tesseract.js, see ocr.js) and PDFs
+ * through direct text extraction (PDF.js, see pdfText.js) — both feed the
+ * recognized text into the same expense parser used for manual/voice entry.
+ * This is the "future OCR phase" the original design left room for.
  * Nothing is ever silently dropped; the caller always gets a clear result.
  */
+/**
+ * Runs OCR (image) or text extraction (PDF) on a file and turns the result
+ * into a VariableExpense if possible. Returns the outcome to merge into a
+ * financialDocuments record — shared by importFinancialDocument (first
+ * upload) and retryDocumentImport (re-attempting a previously failed one,
+ * without asking the user to re-pick the file).
+ */
+async function runAutoImport(fileType, file) {
+  try {
+    const text = fileType === 'image' ? await recognizeImageText(file) : await extractPdfText(file);
+    const source = fileType === 'image' ? 'ocr_import' : 'pdf_import';
+    const { parseStatus, importedExpenses, errors } = await importExpenseFromText(text, source);
+    return { parseStatus, importedExpenses, errors, ocrError: null };
+  } catch (e) {
+    // Network/CDN unreachable, decoding failure, encrypted/corrupt file, etc.
+    // Keep it archived and clearly pending — never lose the upload.
+    return { parseStatus: 'pending_ocr', importedExpenses: [], errors: [e.message], ocrError: e.message };
+  }
+}
+
 export async function importFinancialDocument(file) {
   const fileType = guessFileType(file);
   const doc = {
@@ -205,6 +250,7 @@ export async function importFinancialDocument(file) {
     sizeKb: Math.round(file.size / 1024),
     parseStatus: 'pending_ocr',
     importedCount: 0,
+    ocrError: null,
     uploadedAt: new Date().toISOString(),
     blob: file,
   };
@@ -230,39 +276,36 @@ export async function importFinancialDocument(file) {
     })));
     doc.parseStatus = rows.length > 0 ? 'parsed' : 'unparsed';
     doc.importedCount = importedExpenses.length;
-  } else if (fileType === 'image') {
-    try {
-      const text = await recognizeImageText(file);
-      const parsed = text ? parseExpenseText(text) : null;
-      if (parsed?.value) {
-        const expense = await createVariableExpense({
-          desc: parsed.desc.slice(0, 120) || file.name,
-          value: parsed.value,
-          category: parsed.category || 'importado',
-          paymentMethod: parsed.paymentMethod || 'cartao',
-          source: 'ocr_import',
-        });
-        importedExpenses = [expense];
-        doc.parseStatus = 'parsed';
-        doc.importedCount = 1;
-      } else {
-        doc.parseStatus = 'unparsed';
-        errors = ['Consegui ler a imagem, mas não encontrei um valor reconhecível no texto.'];
-      }
-    } catch (e) {
-      // Network/CDN unreachable, decoding failure, etc. — keep it archived
-      // and clearly pending, never lose the upload.
-      doc.parseStatus = 'pending_ocr';
-      errors = [e.message];
-    }
-  } else if (fileType === 'pdf') {
-    doc.parseStatus = 'pending_ocr';
+  } else if (fileType === 'image' || fileType === 'pdf') {
+    const result = await runAutoImport(fileType, file);
+    doc.parseStatus = result.parseStatus;
+    doc.ocrError = result.ocrError;
+    importedExpenses = result.importedExpenses;
+    errors = result.errors;
+    doc.importedCount = importedExpenses.length;
   } else {
     doc.parseStatus = 'manual';
   }
 
   await db.put('financialDocuments', doc);
   return { document: doc, importedExpenses, errors };
+}
+
+/**
+ * Re-attempts OCR/text-extraction for a document that previously ended up
+ * `pending_ocr` (e.g. the CDN was unreachable at the time) — reuses the
+ * file blob already stored locally, no re-upload needed.
+ */
+export async function retryDocumentImport(docId) {
+  const doc = await db.get('financialDocuments', docId);
+  if (!doc || (doc.fileType !== 'image' && doc.fileType !== 'pdf')) return null;
+
+  const result = await runAutoImport(doc.fileType, doc.blob);
+  doc.parseStatus = result.parseStatus;
+  doc.ocrError = result.ocrError;
+  doc.importedCount = result.importedExpenses.length;
+  await db.put('financialDocuments', doc);
+  return { document: doc, importedExpenses: result.importedExpenses, errors: result.errors };
 }
 
 export async function deleteFinancialDocument(id) {
