@@ -238,49 +238,78 @@ export function parseExpenseText(rawText) {
 // to a single receipt/confirmation. parseExpenseText above only ever grabs
 // the *first* number it sees in the whole blob, which silently produces a
 // wrong, meaningless import when the text actually contains many
-// transactions — this scans line by line instead and only extracts a
-// transaction where a date AND a currency value clearly appear together on
-// the same line, skipping anything ambiguous rather than guessing.
+// transactions.
+//
+// A first version of this split the OCR text by newlines and required a
+// date + value on the same line — that assumption turned out to be wrong:
+// real Tesseract output on a dense table frequently drops the line breaks
+// between rows entirely, running everything together into one blob (e.g.
+// "...R$ 320,4202-07-2026 Rendimentos..." with the next row's date glued
+// straight onto the previous row's balance, no whitespace at all). Splitting
+// on newlines found zero rows in that case and silently fell through to the
+// single-value grab — the exact bug this was meant to fix.
+//
+// This version anchors on date matches instead of line breaks: every date
+// found in the text starts a new "row", ending where the next date begins.
+// That holds regardless of whether real newlines survived OCR, as long as
+// the reading order is roughly row-by-row (true for the layouts tested).
 // ---------------------------------------------------------------------------
 
-const STATEMENT_DATE_RE = /\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/;
+const STATEMENT_DATE_RE = /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/g;
 const STATEMENT_VALUE_RE = /-?\s?r?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/gi;
+// Compound phrases specific enough to an actual account statement/extract —
+// deliberately NOT single generic words like "fatura" or "saldo" alone,
+// which show up plenty in ordinary single-transaction receipts too (a card
+// charge notification, a Pix confirmation) and would wrongly block those
+// from importing via the normal single-value path.
+const STATEMENT_KEYWORDS = /extrato de conta|saldo inicial|saldo final|detalhe dos movimentos/i;
+
+/** Heuristic: does this look like a multi-transaction statement rather than a single receipt? */
+export function looksLikeStatement(rawText) {
+  const text = rawText || '';
+  const dateCount = (text.match(STATEMENT_DATE_RE) || []).length;
+  return dateCount >= 3 || STATEMENT_KEYWORDS.test(text);
+}
 
 /**
- * Extracts one row per line that has both a date and a currency value.
+ * Extracts one row per date occurrence in the text (see design note above).
  * Only negative values (money going out) become rows — this app tracks
  * despesas, not income, so a statement's "Rendimentos"/"Entradas" lines are
  * intentionally skipped, not misfiled as expenses.
- * Returns [] if the text doesn't look like a multi-transaction statement
- * (fewer than 2 usable rows) so callers can fall back to the single-value
- * parser used for simple receipts.
+ * Returns [] if fewer than 2 usable rows were found, so callers can fall
+ * back to the single-value parser used for simple receipts — but see
+ * looksLikeStatement above for when that fallback is actually safe to use.
  */
 export function parseStatementText(rawText) {
-  const lines = (rawText || '').split(/\r?\n+/).map((l) => l.trim()).filter(Boolean);
+  const text = rawText || '';
+  const dateMatches = [...text.matchAll(STATEMENT_DATE_RE)];
+  if (dateMatches.length === 0) return [];
+
   const rows = [];
+  for (let i = 0; i < dateMatches.length; i++) {
+    const dm = dateMatches[i];
+    const segmentStart = dm.index + dm[0].length;
+    const segmentEnd = i + 1 < dateMatches.length ? dateMatches[i + 1].index : text.length;
+    const segment = text.slice(segmentStart, segmentEnd);
 
-  for (const line of lines) {
-    const dateMatch = line.match(STATEMENT_DATE_RE);
-    if (!dateMatch) continue;
-
-    const valueTokens = line.match(STATEMENT_VALUE_RE);
+    const valueTokens = segment.match(STATEMENT_VALUE_RE);
     if (!valueTokens || valueTokens.length === 0) continue;
 
     // A row is typically "... Valor Saldo" — the transaction amount comes
     // before the running balance, so prefer the first token when there's
-    // more than one currency-looking number on the line.
+    // more than one currency-looking number in the segment.
     const raw = valueTokens[0];
     const isNegative = raw.includes('-');
     const numeric = parseFloat(raw.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.'));
     if (isNaN(numeric) || numeric === 0 || !isNegative) continue; // skip income/zero/unparseable
 
-    const day = dateMatch[1].padStart(2, '0');
-    const month = dateMatch[2].padStart(2, '0');
-    const year = dateMatch[3].length === 2 ? `20${dateMatch[3]}` : dateMatch[3];
+    const day = dm[1].padStart(2, '0');
+    const month = dm[2].padStart(2, '0');
+    const year = dm[3].length === 2 ? `20${dm[3]}` : dm[3];
 
-    const afterDate = line.slice(line.indexOf(dateMatch[0]) + dateMatch[0].length);
-    const desc = afterDate.split(raw)[0]
+    const desc = segment.split(raw)[0]
       .replace(/\d{5,}/g, '') // strip long operation/reference IDs
+      .replace(/[^\p{L}\s]/gu, ' ') // drop stray punctuation/digits, keep words
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 80) || 'Transação';
