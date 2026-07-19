@@ -312,13 +312,24 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table td.col-desc {
-  white-space: normal;
   max-width: 220px;
+}
+.data-table .col-desc-title {
+  display: block;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.data-table .col-desc-title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.data-table .col-desc-sub { display: block; font-size: 0.76rem; color: var(--text-muted); margin-top: 2px; }
+.data-table .col-desc-sub {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .data-table td.col-value, .data-table th.col-value { text-align: right; font-weight: 700; white-space: nowrap; }
 .data-table td.col-action { text-align: right; }
 .data-table td.col-action .icon-btn { width: 32px; height: 32px; font-size: 0.95rem; }
