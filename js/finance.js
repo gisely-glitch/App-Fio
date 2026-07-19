@@ -2,7 +2,7 @@
 // card invoice projection, and CSV/XML/PDF/image document import.
 
 import { db, uid } from './db.js';
-import { parseCSV, parseXML, parseExpenseText, parseStatementText, looksLikeStatement } from './parsers.js';
+import { parseCSV, parseXML, parseExpenseText, parseStatementText, parseCardTransactionsText, looksLikeStatement } from './parsers.js';
 import { recognizeImageText } from './ocr.js';
 import { extractPdfText } from './pdfText.js';
 
@@ -236,13 +236,14 @@ function guessFileType(file) {
  * importFinancialDocument below — same parsers, same "never silently drop
  * it" contract either way.
  *
- * Tries statement mode first: a photo of a bank/wallet extract has several
- * transaction rows, and grabbing just the first number in the whole blob
- * (the single-receipt heuristic) produces a wrong, meaningless import — it
- * did exactly that on a real user statement, twice, before this safety net
- * existed. So: if the text *looks* like a statement (several dates, or
- * words like "extrato"/"saldo"/"movimentos") but parseStatementText can't
- * confidently pull out real rows, this refuses to guess with the
+ * Tries multi-transaction modes first: a photo of a bank/wallet extract or
+ * a card app's transaction list has several rows, and grabbing just the
+ * first number in the whole blob (the single-receipt heuristic) produces a
+ * wrong, meaningless import — it did exactly that on real user documents
+ * more than once before this safety net existed. So: if the text *looks*
+ * like a statement (several dates, or words like "extrato"/"saldo"/
+ * "movimentos"/"últimas transações") but neither multi-transaction parser
+ * can confidently pull out real rows, this refuses to guess with the
  * single-value fallback — that fallback is only safe for text that doesn't
  * look like a statement in the first place (an actual single receipt).
  */
@@ -250,8 +251,9 @@ async function importExpenseFromText(text, source) {
   const cardId = await matchCardByDigits(text);
 
   const statementRows = text ? parseStatementText(text) : [];
-  if (statementRows.length > 0) {
-    const importedExpenses = await Promise.all(statementRows.map((r) => createVariableExpense({
+  const multiRows = statementRows.length > 0 ? statementRows : (text ? parseCardTransactionsText(text) : []);
+  if (multiRows.length > 0) {
+    const importedExpenses = await Promise.all(multiRows.map((r) => createVariableExpense({
       desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', cardId, source,
     })));
     return { parseStatus: 'parsed', importedExpenses, errors: [] };

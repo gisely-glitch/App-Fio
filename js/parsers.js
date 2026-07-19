@@ -288,17 +288,18 @@ export function parseExpenseText(rawText) {
 
 const STATEMENT_DATE_RE = /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/g;
 const STATEMENT_VALUE_RE = /-?\s?r?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/gi;
-// Compound phrases specific enough to an actual account statement/extract —
-// deliberately NOT single generic words like "fatura" or "saldo" alone,
-// which show up plenty in ordinary single-transaction receipts too (a card
-// charge notification, a Pix confirmation) and would wrongly block those
-// from importing via the normal single-value path.
-const STATEMENT_KEYWORDS = /extrato de conta|saldo inicial|saldo final|detalhe dos movimentos/i;
+// Compound phrases specific enough to an actual account statement/extract or
+// a card app's transaction list — deliberately NOT single generic words like
+// "fatura" or "saldo" alone, which show up plenty in ordinary
+// single-transaction receipts too (a card charge notification, a Pix
+// confirmation) and would wrongly block those from importing via the normal
+// single-value path.
+const STATEMENT_KEYWORDS = /extrato de conta|saldo inicial|saldo final|detalhe dos movimentos|ultimas transa[çc][õo]es/i;
 
 /** Heuristic: does this look like a multi-transaction statement rather than a single receipt? */
 export function looksLikeStatement(rawText) {
   const text = rawText || '';
-  const dateCount = (text.match(STATEMENT_DATE_RE) || []).length;
+  const dateCount = (text.match(STATEMENT_DATE_RE) || []).length + (text.match(ABBR_DATE_RE) || []).length;
   return dateCount >= 3 || STATEMENT_KEYWORDS.test(text);
 }
 
@@ -344,6 +345,67 @@ export function parseStatementText(rawText) {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 80) || 'Transação';
+
+    rows.push({ desc, value: Math.abs(numeric), date: `${year}-${month}-${day}` });
+  }
+
+  return rows.length >= 2 ? rows : [];
+}
+
+// ---------------------------------------------------------------------------
+// Card-app transaction list — a different shape from a bank extract: a
+// banking app's "Últimas transações" screen lists MERCHANT ... VALOR first,
+// with the date trailing afterwards ("AMAZON BR R$ 35,98 Autorizado 15 jul.
+// 2026"), using abbreviated Portuguese month names instead of dd/mm/yyyy —
+// and every listed entry is a charge (no running balance/income concept to
+// filter out, unlike a bank extract). parseStatementText's date-anchored
+// approach doesn't fit this shape (the date isn't a reliable row-start
+// marker here), so this anchors on values instead and looks for a date
+// trailing shortly after each one.
+// ---------------------------------------------------------------------------
+
+const PT_MONTH_ABBR = {
+  jan: '01', fev: '02', mar: '03', abr: '04', mai: '05', jun: '06',
+  jul: '07', ago: '08', set: '09', out: '10', nov: '11', dez: '12',
+};
+const ABBR_DATE_RE = new RegExp(`(\\d{1,2})\\s*(?:de\\s+)?(${Object.keys(PT_MONTH_ABBR).join('|')})[a-z]*\\.?\\s*(?:de\\s+)?(\\d{4})`, 'gi');
+
+export function parseCardTransactionsText(rawText) {
+  const text = rawText || '';
+  const valueMatches = [...text.matchAll(STATEMENT_VALUE_RE)];
+  if (valueMatches.length === 0) return [];
+
+  const rows = [];
+  for (let i = 0; i < valueMatches.length; i++) {
+    const vm = valueMatches[i];
+    const numeric = parseFloat(vm[0].replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+    if (isNaN(numeric) || numeric === 0) continue;
+
+    // Look for a trailing date shortly after this value (before the next
+    // value starts, so it isn't accidentally borrowed from the next row).
+    const windowEnd = i + 1 < valueMatches.length ? valueMatches[i + 1].index : Math.min(text.length, vm.index + vm[0].length + 60);
+    const afterText = text.slice(vm.index + vm[0].length, windowEnd);
+    const dateMatch = afterText.match(ABBR_DATE_RE) ? [...afterText.matchAll(ABBR_DATE_RE)][0] : null;
+    if (!dateMatch) continue; // no confidently-associated date — skip rather than guess
+
+    const day = dateMatch[1].padStart(2, '0');
+    const month = PT_MONTH_ABBR[dateMatch[2].toLowerCase()];
+    const year = dateMatch[3];
+
+    // Description: the merchant name immediately before the value — take
+    // the tail end of the preceding text (bounded by the previous value's
+    // end, or a short fixed window) and keep only its last segment after
+    // common UI separators, so surrounding chrome (card number, "Titular",
+    // filter buttons...) doesn't leak into it.
+    const priorStart = i > 0 ? valueMatches[i - 1].index + valueMatches[i - 1][0].length : Math.max(0, vm.index - 80);
+    const beforeText = text.slice(priorStart, vm.index);
+    const lastSegment = beforeText.split(/[>|•\n]/).pop() || beforeText;
+    const desc = lastSegment
+      .replace(/\d{5,}/g, '')
+      .replace(/\*/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60) || 'Transação';
 
     rows.push({ desc, value: Math.abs(numeric), date: `${year}-${month}-${day}` });
   }
