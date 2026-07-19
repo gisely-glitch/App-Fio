@@ -797,7 +797,9 @@ async function renderDocuments() {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       btn.textContent = 'Lendo…';
-      const result = await retryDocumentImport(btn.dataset.retryDoc);
+      const result = await retryDocumentImport(btn.dataset.retryDoc, {
+        onProgress: ({ page, totalPages }) => { btn.textContent = `Lendo pág. ${page}/${totalPages}…`; },
+      });
       if (result?.document.parseStatus === 'parsed') {
         toast(`${result.importedExpenses.length} lançamento(s) importado(s).`);
       } else if (result?.document.parseStatus === 'unparsed') {
@@ -816,7 +818,12 @@ $('#btn-upload-doc').addEventListener('click', () => $('#input-upload-doc').clic
 $('#input-upload-doc').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  const { document: doc, importedExpenses, errors } = await importFinancialDocument(file);
+  if (file.name.toLowerCase().endsWith('.pdf') || file.type.includes('pdf')) {
+    toast(`Lendo "${file.name}"… PDFs de várias páginas podem levar um tempinho.`);
+  }
+  const { document: doc, importedExpenses, errors } = await importFinancialDocument(file, {
+    onProgress: ({ page, totalPages }) => toast(`Lendo página ${page} de ${totalPages}…`),
+  });
   if (doc.parseStatus === 'parsed') {
     toast(`"${file.name}": ${importedExpenses.length} lançamento(s) importado(s).`);
   } else if (doc.parseStatus === 'pending_ocr') {

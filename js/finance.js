@@ -2,9 +2,9 @@
 // card invoice projection, and CSV/XML/PDF/image document import.
 
 import { db, uid } from './db.js';
-import { parseCSV, parseXML, parseExpenseText, parseStatementText, parseCardTransactionsText, looksLikeStatement } from './parsers.js';
+import { parseCSV, parseXML, parseExpenseText, parseStatementText, parseCardTransactionsText, parseCardInvoiceText, looksLikeStatement } from './parsers.js';
 import { recognizeImageText } from './ocr.js';
-import { extractPdfText } from './pdfText.js';
+import { extractPdfText, ocrPdfPages } from './pdfText.js';
 
 // ---------------------------------------------------------------------------
 // Cards
@@ -247,11 +247,24 @@ function guessFileType(file) {
  * single-value fallback — that fallback is only safe for text that doesn't
  * look like a statement in the first place (an actual single receipt).
  */
+function detectMultiRows(text) {
+  if (!text) return [];
+  // Bank extract (date + description + value + running balance, negative =
+  // outgoing) → card app "últimas transações" (value then trailing date) →
+  // card invoice/fatura (bare DD/MM date, positive values, grouped by card
+  // with Total lines). Each returns [] unless it finds a confident multi-row
+  // match, so trying them in sequence is safe — only one shape will ever fit.
+  const statementRows = parseStatementText(text);
+  if (statementRows.length > 0) return statementRows;
+  const cardTxnRows = parseCardTransactionsText(text);
+  if (cardTxnRows.length > 0) return cardTxnRows;
+  return parseCardInvoiceText(text);
+}
+
 async function importExpenseFromText(text, source) {
   const cardId = await matchCardByDigits(text);
 
-  const statementRows = text ? parseStatementText(text) : [];
-  const multiRows = statementRows.length > 0 ? statementRows : (text ? parseCardTransactionsText(text) : []);
+  const multiRows = detectMultiRows(text);
   if (multiRows.length > 0) {
     const importedExpenses = await Promise.all(multiRows.map((r) => createVariableExpense({
       desc: r.desc, value: r.value, date: r.date, category: 'importado', paymentMethod: 'cartao', cardId, source,
@@ -301,20 +314,51 @@ async function importExpenseFromText(text, source) {
  * upload) and retryDocumentImport (re-attempting a previously failed one,
  * without asking the user to re-pick the file).
  */
-async function runAutoImport(fileType, file) {
+async function runAutoImport(fileType, file, { onProgress } = {}) {
+  if (fileType === 'image') {
+    try {
+      const text = await recognizeImageText(file);
+      const result = await importExpenseFromText(text, 'ocr_import');
+      return { ...result, ocrError: null };
+    } catch (e) {
+      // Network/CDN unreachable, decoding failure, etc. Keep it archived
+      // and clearly pending — never lose the upload.
+      return { parseStatus: 'pending_ocr', importedExpenses: [], errors: [e.message], ocrError: e.message };
+    }
+  }
+
+  // PDF: try the embedded text layer first (fast). Some PDF generators use
+  // a font with a broken character encoding — the text is there but
+  // extracting it yields garbage ("$4 2J102,)%" instead of "R$ 2.102,79",
+  // a real example). No parsing logic recovers correct data from already-
+  // corrupted characters, so when direct extraction doesn't produce a
+  // usable import (or throws outright — encrypted/corrupt file), fall back
+  // to rendering each page as an image and OCR'ing it, same as a photo.
+  let textResult = null;
+  let textError = null;
   try {
-    const text = fileType === 'image' ? await recognizeImageText(file) : await extractPdfText(file);
-    const source = fileType === 'image' ? 'ocr_import' : 'pdf_import';
-    const { parseStatus, importedExpenses, errors } = await importExpenseFromText(text, source);
-    return { parseStatus, importedExpenses, errors, ocrError: null };
+    const text = await extractPdfText(file);
+    textResult = await importExpenseFromText(text, 'pdf_import');
   } catch (e) {
-    // Network/CDN unreachable, decoding failure, encrypted/corrupt file, etc.
-    // Keep it archived and clearly pending — never lose the upload.
-    return { parseStatus: 'pending_ocr', importedExpenses: [], errors: [e.message], ocrError: e.message };
+    textError = e;
+  }
+
+  if (textResult?.parseStatus === 'parsed') {
+    return { ...textResult, ocrError: null };
+  }
+
+  try {
+    const ocrText = await ocrPdfPages(file, { onProgress });
+    const ocrResult = await importExpenseFromText(ocrText, 'pdf_import');
+    return { ...ocrResult, ocrError: null };
+  } catch (e) {
+    if (textResult) return { ...textResult, ocrError: null };
+    const message = (textError || e).message;
+    return { parseStatus: 'pending_ocr', importedExpenses: [], errors: [message], ocrError: message };
   }
 }
 
-export async function importFinancialDocument(file) {
+export async function importFinancialDocument(file, { onProgress } = {}) {
   const fileType = guessFileType(file);
   const doc = {
     id: uid(),
@@ -352,7 +396,7 @@ export async function importFinancialDocument(file) {
     doc.parseStatus = rows.length > 0 ? 'parsed' : 'unparsed';
     doc.importedCount = importedExpenses.length;
   } else if (fileType === 'image' || fileType === 'pdf') {
-    const result = await runAutoImport(fileType, file);
+    const result = await runAutoImport(fileType, file, { onProgress });
     doc.parseStatus = result.parseStatus;
     doc.ocrError = result.ocrError;
     importedExpenses = result.importedExpenses;
@@ -371,11 +415,11 @@ export async function importFinancialDocument(file) {
  * `pending_ocr` (e.g. the CDN was unreachable at the time) — reuses the
  * file blob already stored locally, no re-upload needed.
  */
-export async function retryDocumentImport(docId) {
+export async function retryDocumentImport(docId, { onProgress } = {}) {
   const doc = await db.get('financialDocuments', docId);
   if (!doc || (doc.fileType !== 'image' && doc.fileType !== 'pdf')) return null;
 
-  const result = await runAutoImport(doc.fileType, doc.blob);
+  const result = await runAutoImport(doc.fileType, doc.blob, { onProgress });
   doc.parseStatus = result.parseStatus;
   doc.ocrError = result.ocrError;
   doc.importedCount = result.importedExpenses.length;
