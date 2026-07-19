@@ -107,8 +107,16 @@ export function parseAppointmentText(rawText, referenceDate = new Date()) {
   }
 
   // ---- Time detection ----
-  // "16h", "16h30", "16:00", "às 4 da tarde", "4pm"
-  const timeMatch = text.match(/\b(\d{1,2})[h:](\d{2})?\b/) || text.match(/\bàs?\s+(\d{1,2})\b/);
+  // "16h", "16h30", "16:00", "às 4 da tarde", "4pm". A time explicitly
+  // preceded by "às"/"as" (how pt-BR actually states an appointment time,
+  // e.g. "consulta às 13:30h") is checked FIRST and preferred over any bare
+  // H:MM pattern found elsewhere — text pasted or OCR'd from a WhatsApp
+  // screenshot is full of other H:MM-looking things (chat message
+  // timestamps, the phone's own status bar clock) that aren't the
+  // appointment's time at all, and used to win just by appearing earlier
+  // in the string.
+  const asTimeMatch = flatText.match(/\bas\s+(\d{1,2})(?:[h:](\d{2}))?h?\b/);
+  const timeMatch = asTimeMatch || text.match(/\b(\d{1,2})[h:](\d{2})?h?\b/);
   if (timeMatch) {
     let hour = parseInt(timeMatch[1], 10);
     let minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
@@ -120,11 +128,23 @@ export function parseAppointmentText(rawText, referenceDate = new Date()) {
   }
 
   // ---- Title cleanup ----
-  // Try to find a short label after keywords like "com Dr." / "com" for a nicer title.
-  const withMatch = rawText && rawText.match(/com\s+([A-ZÀ-Ú][\wÀ-ú.()]*(\s+[A-ZÀ-Ú][\wÀ-ú.()]*)*)/);
+  // Try to find a short label after keywords like "com Dr." / "com" for a
+  // nicer title. WhatsApp renders *bold* around a name with literal
+  // asterisks in the underlying text ("com * Dr(a). Fabiana"), so an
+  // optional "*"/"_" is allowed between "com" and the capitalized name.
+  const withMatch = rawText && rawText.match(/com\s*[*_]?\s*([A-ZÀ-Ú][\wÀ-ú.()]*(\s+[A-ZÀ-Ú][\wÀ-ú.()]*)*)/);
   if (withMatch) {
     const typeLabel = { exame: 'Exame', consulta: 'Consulta', reuniao: 'Reunião', outro: 'Compromisso' }[result.type];
     result.title = `${typeLabel} com ${withMatch[1]}`.slice(0, 80);
+  } else if (rawText) {
+    // Fallback: first line of the raw text — but text pasted/OCR'd from a
+    // chat screenshot often has a first line that's just UI noise (a
+    // timestamp, a stray symbol from a misread icon), not anything
+    // resembling a title. Skip lines that don't have enough real letters
+    // in them before settling for one, rather than confidently naming the
+    // appointment "22:58 > SE)".
+    const candidateLine = rawText.split('\n').map((l) => l.trim()).find((l) => (l.match(/\p{L}/gu) || []).length >= 4);
+    result.title = (candidateLine || rawText.trim().split('\n')[0]).slice(0, 80);
   }
 
   result.recurrence = parseRecurrenceText(rawText);
