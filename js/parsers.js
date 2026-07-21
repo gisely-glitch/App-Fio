@@ -294,13 +294,17 @@ const STATEMENT_VALUE_RE = /-?\s?r?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/gi;
 // single-transaction receipts too (a card charge notification, a Pix
 // confirmation) and would wrongly block those from importing via the normal
 // single-value path.
-const STATEMENT_KEYWORDS = /extrato de conta|saldo inicial|saldo final|detalhe dos movimentos|ultimas transa[çc][õo]es/i;
+const STATEMENT_KEYWORDS = /extrato de conta|saldo inicial|saldo final|detalhe dos movimentos|ultimas transa[çc][õo]es|movimenta[çc][õo]es na fatura|detalhes de consumo/i;
 
 /** Heuristic: does this look like a multi-transaction statement rather than a single receipt? */
 export function looksLikeStatement(rawText) {
   const text = rawText || '';
   const dateCount = (text.match(STATEMENT_DATE_RE) || []).length + (text.match(ABBR_DATE_RE) || []).length;
-  return dateCount >= 3 || STATEMENT_KEYWORDS.test(text);
+  // Bare DD/MM (no year — e.g. a card invoice's transaction list) is a
+  // looser pattern, more prone to matching unrelated things, so it needs a
+  // higher count before being treated as a signal on its own.
+  const bareDateCount = (text.match(INVOICE_DATE_RE) || []).length;
+  return dateCount >= 3 || bareDateCount >= 5 || STATEMENT_KEYWORDS.test(text);
 }
 
 /**
@@ -403,6 +407,76 @@ export function parseCardTransactionsText(rawText) {
     const desc = lastSegment
       .replace(/\d{5,}/g, '')
       .replace(/\*/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60) || 'Transação';
+
+    rows.push({ desc, value: Math.abs(numeric), date: `${year}-${month}-${day}` });
+  }
+
+  return rows.length >= 2 ? rows : [];
+}
+
+// ---------------------------------------------------------------------------
+// Card invoice ("fatura") — a third shape, distinct from both above: a
+// credit card bill grouped into sections per physical card ("Cartão Visa
+// [****6057]"), each with its own "Data Movimentações Valor em R$" header
+// and a "Total R$ X,XX" line at the end. Dates here are DD/MM with NO year
+// (the invoice's own emission/due date supplies the year), and every row is
+// a positive charge — same as the card-app transactions list, but date
+// comes first instead of trailing after the value.
+//
+// The "Total" line is deliberately not special-cased: since it has no date
+// of its own, it simply becomes trailing noise at the end of the previous
+// row's segment, and only the FIRST currency value in a segment is ever
+// used — so it's naturally ignored rather than mistaken for a transaction.
+// ---------------------------------------------------------------------------
+
+const INVOICE_DATE_RE = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g;
+const REFERENCE_YEAR_RE = /(?:emitido em|vencimento)\s*:?\s*\d{1,2}\/\d{1,2}\/(\d{4})/i;
+
+export function parseCardInvoiceText(rawText) {
+  const text = rawText || '';
+  const dateMatches = [...text.matchAll(INVOICE_DATE_RE)];
+  if (dateMatches.length === 0) return [];
+
+  const refYearMatch = text.match(REFERENCE_YEAR_RE);
+  const referenceYear = refYearMatch ? refYearMatch[1] : String(new Date().getFullYear());
+
+  const rows = [];
+  for (let i = 0; i < dateMatches.length; i++) {
+    const dm = dateMatches[i];
+    const segmentStart = dm.index + dm[0].length;
+    const segmentEnd = i + 1 < dateMatches.length ? dateMatches[i + 1].index : text.length;
+    const segment = text.slice(segmentStart, segmentEnd);
+
+    const valueTokens = segment.match(STATEMENT_VALUE_RE);
+    if (!valueTokens || valueTokens.length === 0) continue;
+
+    // A payment TOWARD the card (paying off a previous invoice), a
+    // refund/credit, or a summary/total figure ("Total a pagar R$ 2.102,79"
+    // from the invoice's header, "Total R$ 1.029,37" closing a card
+    // section) isn't a real transaction — skip it. Checked against the text
+    // immediately before the value specifically, not the whole segment,
+    // since "total" only disqualifies a row when it's describing *this*
+    // value (a merchant name mentioned earlier in a longer segment
+    // shouldn't be excluded just because the word appears somewhere in it).
+    const beforeValue = segment.slice(0, segment.indexOf(valueTokens[0]));
+    if (/pagamento (da|de) fatura|estorno|cr[eé]dito devolvido|total/i.test(beforeValue)) continue;
+
+    const raw = valueTokens[0];
+    const numeric = parseFloat(raw.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+    if (isNaN(numeric) || numeric === 0) continue;
+
+    const day = dm[1].padStart(2, '0');
+    const month = dm[2].padStart(2, '0');
+    const year = dm[3] ? (dm[3].length === 2 ? `20${dm[3]}` : dm[3]) : referenceYear;
+
+    const desc = segment.split(raw)[0]
+      .replace(/parcela\s+\d+\s+de\s+\d+/i, '')
+      .replace(/\d{5,}/g, '')
+      .replace(/\*/g, ' ')
+      .replace(/[^\p{L}0-9\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 60) || 'Transação';
