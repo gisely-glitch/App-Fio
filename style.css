@@ -153,6 +153,8 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
+  flex: 1 1 140px;
+  min-width: 0;
 }
 
 .empty-state {
