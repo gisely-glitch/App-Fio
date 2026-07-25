@@ -70,6 +70,12 @@ function formatDateTime(iso) {
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
+// Compact DD/MM for narrow table columns — used where the row is already
+// scoped to a single month (Lançamentos), so the year is redundant; the
+// full date is still available via a title attribute for clarity.
+function formatDateShort(iso) {
+  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
 
 const TYPE_LABELS = { consulta: 'Consulta', exame: 'Exame', reuniao: 'Reunião', outro: 'Outro' };
 const STATUS_LABELS = { pendente: 'Pendente', confirmado: 'Confirmado', faltou: 'Faltou' };
@@ -623,7 +629,7 @@ async function renderLancamentos() {
       ? ` · ${exp.cardId ? escapeHtml(cardsById.get(exp.cardId)?.name || '?') : 'sem cartão definido'}`
       : '';
     tr.innerHTML = `
-      <td>${formatDate(exp.date)}</td>
+      <td class="col-date" title="${formatDate(exp.date)}">${formatDateShort(exp.date)}</td>
       <td class="col-desc" title="${escapeHtml(exp.desc)}">
         <span class="col-desc-title">${escapeHtml(exp.desc)}</span>
         <span class="col-desc-sub">${exp.category} · ${PAYMENT_LABELS[exp.paymentMethod] || exp.paymentMethod}${cardLabel}</span>

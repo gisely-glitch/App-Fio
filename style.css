@@ -292,14 +292,25 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 }
 .data-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
+.data-table col.col-date { width: 3.4em; }
+.data-table col.col-value { width: 5.6em; }
+.data-table col.col-action { width: 2.8em; }
+.data-table col.col-desc { width: auto; }
 .data-table th, .data-table td {
-  padding: 10px 12px;
+  padding: 10px 8px;
   text-align: left;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.data-table td.col-date {
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 .data-table thead th {
   background: var(--bg-elevated);
@@ -311,9 +322,6 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
   top: 0;
 }
 .data-table tbody tr:last-child td { border-bottom: none; }
-.data-table td.col-desc {
-  max-width: 220px;
-}
 .data-table .col-desc-title {
   display: block;
   font-weight: 600;
@@ -331,8 +339,8 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
   white-space: nowrap;
 }
 .data-table td.col-value, .data-table th.col-value { text-align: right; font-weight: 700; white-space: nowrap; }
-.data-table td.col-action { text-align: right; }
-.data-table td.col-action .icon-btn { width: 32px; height: 32px; font-size: 0.95rem; }
+.data-table td.col-action { text-align: right; padding-left: 4px; padding-right: 4px; }
+.data-table td.col-action .icon-btn { width: 28px; height: 28px; font-size: 0.85rem; }
 
 /* ---------------- Buttons ---------------- */
 
