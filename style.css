@@ -298,8 +298,8 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
   border-collapse: collapse;
   font-size: 0.85rem;
 }
-.data-table col.col-date { width: 3.4em; }
-.data-table col.col-value { width: 5.6em; }
+.data-table col.col-date { width: 4.6em; }
+.data-table col.col-value { width: 7.2em; }
 .data-table col.col-action { width: 2.8em; }
 .data-table col.col-desc { width: auto; }
 .data-table th, .data-table td {
@@ -307,6 +307,13 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
   text-align: left;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+}
+/* Only the description is free-length text that's fine to truncate (it has
+   a `title` with the full value). Date and value are short, bounded, and
+   never safe to cut — silently hiding digits from a date or an amount is
+   worse than the rare case of one running slightly wide, so those columns
+   get generous width instead of ellipsis/overflow-hidden. */
+.data-table td.col-desc, .data-table th.col-desc {
   overflow: hidden;
   text-overflow: ellipsis;
 }
