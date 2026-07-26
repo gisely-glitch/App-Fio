@@ -111,3 +111,55 @@
   com `@($x)` — senão um array JSON de nível raiz pode ficar aninhado (Count=1 contendo
   o array real dentro), quebrando silenciosamente qualquer comparação/deduplicação
   baseada nesse array.
+
+### 2026-07-26 — verification-standard.md rodado contra o PR #10 (app Fio, JS/PWA)
+- Gatilho: pedido para rodar o `verification-standard.md` contra as mudanças do PR #10
+  (correção de tabela de Lançamentos cortada no celular, "Total" da fatura duplicado na
+  importação, filtros de Compromissos com espaço vazio) antes do merge.
+- Verificação (12 critérios testáveis localmente, servidor em `localhost:8765`, branch
+  `claude/fio-web-app-ti1her`): rodei uma auditoria estática de handlers (0 botões "mortos"
+  encontrados) + uma suíte Playwright dinâmica cobrindo fluxo compromissos→tarefas→
+  documentos, importação CSV, reload, fechar/reabrir o navegador de verdade (não só F5,
+  via `launchPersistentContext`), e simulação de `QuotaExceededError` real do IndexedDB.
+  Em paralelo, um segundo revisor com contexto limpo (subagent sem visibilidade das minhas
+  mudanças) repetiu os passos 1-5 de forma independente, com CSV próprio e fluxo próprio.
+- Defeito real encontrado e corrigido durante o ciclo (achado pelo segundo revisor, não
+  pela minha primeira passada — meu teste original só checava a largura total da tabela e
+  a truncagem da descrição, nunca testei se a própria coluna de data/valor tinha espaço
+  suficiente para conteúdo realista):
+  - A mudança anterior do PR #10 (`table-layout: fixed` com larguras em `em` via
+    `<colgroup>`, para resolver o corte/scroll horizontal da tabela) fixou as colunas de
+    data (`3.4em`) e valor (`5.6em`) estreitas demais: em 375px, "Data" virava "DA…",
+    "20/07" virava "20…", "R$ 200,00" virava "R$ 200…" — cortando dígitos de data/valor
+    silenciosamente, o que é pior que o bug original de scroll horizontal que a mudança
+    tentava resolver.
+  - Causa raiz: os valores de `em` foram calibrados só contra os exemplos usados no teste
+    original (datas/valores curtos que por coincidência coubevam), sem verificar
+    `scrollWidth > clientWidth` da própria célula de data/valor contra conteúdo realista
+    (valores redondos tipo "R$ 200,00", faturas maiores tipo "R$ 12.345,67").
+  - Correção aplicada: aumentei as larguras (`col-date` 3.4em→4.6em, `col-value`
+    5.6em→7.2em) e tirei `overflow:hidden`/`text-overflow:ellipsis` das colunas de
+    data/valor por completo, deixando isso só na coluna de descrição — a única com texto de
+    tamanho livre onde truncar é uma troca aceitável (tem `title` com o texto completo).
+    Reverifiquei com valores pequenos, médios e um outlier grande (R$ 12.345,67) e uma
+    descrição bem longa: zero truncagem de data/valor, zero overflow horizontal de página,
+    em 375px e 1280px.
+- Virou regra ativa: não ainda (1ª ocorrência deste padrão específico — "testar só a
+  largura total, não a largura de cada coluna individualmente"). Observação para o futuro:
+  ao usar `table-layout: fixed` com larguras fixas por coluna, sempre testar
+  `scrollWidth > clientWidth` de CADA coluna individualmente contra valores realistas
+  (incluindo outliers grandes), não só o `scrollWidth` da tabela/container como um todo —
+  um teste que só olha a largura total pode passar mesmo com colunas individuais cortando
+  conteúdo.
+- 2 achados que NÃO são regressão do PR #10 (já existiam antes, confirmados por mim e pelo
+  segundo revisor de forma independente, incluindo checagem por inspeção de código):
+  - Nenhuma deduplicação ao importar o mesmo CSV/documento duas vezes — lançamentos
+    dobram silenciosamente, sem aviso. `js/finance.js` (`importFinancialDocument`) nunca
+    teve essa checagem.
+  - Nenhum tratamento de estouro de cota do IndexedDB — `QuotaExceededError` simulado
+    resultou em exceção não tratada, nenhum toast de aviso, modal de captura travado
+    aberto. Nenhuma ocorrência de `quota`/`QuotaExceededError`/`navigator.storage` em
+    todo o repositório.
+  - Ambos ficam como decisão do usuário: corrigir como itens separados ou só manter
+    documentado aqui por enquanto — não corrigidos nesta sessão por não serem causalmente
+    ligados ao escopo do PR #10 (regra de "Escopo" do CLAUDE.md).
