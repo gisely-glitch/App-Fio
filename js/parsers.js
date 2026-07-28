@@ -434,11 +434,33 @@ export function parseCardTransactionsText(rawText) {
 
 const INVOICE_DATE_RE = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g;
 const REFERENCE_YEAR_RE = /(?:emitido em|vencimento)\s*:?\s*\d{1,2}\/\d{1,2}\/(\d{4})/i;
+// "Total" (and similar summary labels) usually sits far enough from any
+// transaction date that the per-segment check below excludes it — but a
+// highlighted "Total" box (as invoice apps commonly render the amount due)
+// can get read twice by OCR's page-segmentation, landing its value in a
+// segment where nothing "total"-looking immediately precedes it. As a
+// second line of defense, scan the WHOLE text (not just individual
+// date-anchored segments) for any value labeled "total" and refuse to
+// import a transaction for that exact amount at all — a real purchase
+// coincidentally costing the invoice's grand total to the cent isn't a
+// realistic risk worth trading away this protection for.
+const TOTAL_LABEL_VALUE_RE = /total[^\d\n]{0,25}(-?\s?r?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2})/gi;
+
+function collectLabeledTotals(text) {
+  const totals = new Set();
+  for (const m of text.matchAll(TOTAL_LABEL_VALUE_RE)) {
+    const numeric = parseFloat(m[1].replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+    if (!isNaN(numeric) && numeric !== 0) totals.add(numeric.toFixed(2));
+  }
+  return totals;
+}
 
 export function parseCardInvoiceText(rawText) {
   const text = rawText || '';
   const dateMatches = [...text.matchAll(INVOICE_DATE_RE)];
   if (dateMatches.length === 0) return [];
+
+  const excludedTotals = collectLabeledTotals(text);
 
   const refYearMatch = text.match(REFERENCE_YEAR_RE);
   const referenceYear = refYearMatch ? refYearMatch[1] : String(new Date().getFullYear());
@@ -467,6 +489,7 @@ export function parseCardInvoiceText(rawText) {
     const raw = valueTokens[0];
     const numeric = parseFloat(raw.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.'));
     if (isNaN(numeric) || numeric === 0) continue;
+    if (excludedTotals.has(numeric.toFixed(2))) continue;
 
     const day = dm[1].padStart(2, '0');
     const month = dm[2].padStart(2, '0');
