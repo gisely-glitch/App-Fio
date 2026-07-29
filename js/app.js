@@ -4,7 +4,7 @@
 import { parseAppointmentText, parseExpenseText } from './parsers.js';
 import {
   createAppointment, listAppointments, getAppointment, updateAppointment, deleteAppointment,
-  markAttendance, rescheduleAppointment, toggleDerivedTask,
+  markAttendance, rescheduleAppointment, toggleDerivedTask, toggleLembreteDone,
   addAttachment, getAttachmentsForAppointment, deleteAttachment,
   extendRecurringAppointments, getRecurrenceSeries, cancelRecurrenceFromHere,
 } from './appointments.js';
@@ -65,6 +65,7 @@ function formatCurrency(value) {
   return (value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 function formatDateTime(iso) {
+  if (!iso) return 'Sem data definida';
   return new Date(iso).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 function formatDate(iso) {
@@ -138,9 +139,14 @@ async function renderAppointments() {
 
   const now = Date.now();
   for (const appt of items) {
-    const isPastPending = appt.status === 'pendente' && new Date(appt.datetime).getTime() < now;
+    const isLembrete = appt.kind === 'lembrete';
+    const isPastPending = !isLembrete && appt.status === 'pendente' && new Date(appt.datetime).getTime() < now;
     const node = document.createElement('div');
     node.className = `timeline-node status-${appt.status}${isPastPending ? ' status-pendente-past' : ''}`;
+
+    const statusLabel = isLembrete
+      ? (appt.status === 'confirmado' ? 'Concluído' : 'Pendente')
+      : (isPastPending ? 'Aguardando confirmação' : STATUS_LABELS[appt.status]);
 
     const card = document.createElement('button');
     card.type = 'button';
@@ -152,8 +158,8 @@ async function renderAppointments() {
         <span class="appt-datetime">${formatDateTime(appt.datetime)}</span>
       </div>
       <div class="appt-meta">
-        <span class="badge badge-type">${TYPE_LABELS[appt.type] || appt.type}</span>
-        <span class="badge badge-status-${appt.status}">${isPastPending ? 'Aguardando confirmação' : STATUS_LABELS[appt.status]}</span>
+        <span class="badge badge-type">${isLembrete ? '📌 Lembrete' : (TYPE_LABELS[appt.type] || appt.type)}</span>
+        <span class="badge badge-status-${appt.status}">${statusLabel}</span>
         ${appt.derivedTask ? `<span class="badge ${appt.derivedTask.done ? 'badge-task-done' : 'badge-task-open'}">${escapeHtml(appt.derivedTask.label)}</span>` : ''}
         ${appt.attachments?.length ? `<span class="badge">📎 ${appt.attachments.length}</span>` : ''}
         ${appt.recurrence ? `<span class="badge" title="Faz parte de uma série recorrente">🔁</span>` : ''}
@@ -187,37 +193,53 @@ async function openAppointmentDetail(id) {
   currentDetailApptId = id;
   $('#appt-detail-title').textContent = appt.title;
 
-  const isPastPending = appt.status === 'pendente' && new Date(appt.datetime).getTime() < Date.now();
+  const isLembrete = appt.kind === 'lembrete';
+  const isPastPending = !isLembrete && appt.status === 'pendente' && new Date(appt.datetime).getTime() < Date.now();
   const series = appt.recurrence ? await getRecurrenceSeries(appt.recurrence.groupId) : null;
-  $('#appt-detail-body').innerHTML = `
-    <p><strong>${formatDateTime(appt.datetime)}</strong></p>
-    <p class="hint">${TYPE_LABELS[appt.type]} · origem: ${appt.source} · status: ${isPastPending ? 'aguardando confirmação' : STATUS_LABELS[appt.status]}</p>
-    ${series ? `<p class="hint">🔁 ${describeRecurrence(series)}${series.until ? ` até ${formatDate(series.until)}` : ''}</p>` : ''}
-    ${appt.derivedTask ? `
-      <div class="field">
-        <label><input type="checkbox" id="detail-task-checkbox" ${appt.derivedTask.done ? 'checked' : ''} style="width:auto;display:inline-block;margin-right:6px;">
-        ${escapeHtml(appt.derivedTask.label)} (prazo: ${formatDate(appt.derivedTask.dueDate)})</label>
-      </div>` : ''}
-    ${appt.status === 'pendente' ? `<button type="button" class="btn btn-secondary btn-small" id="btn-manual-attendance">Registrar comparecimento</button>` : ''}
-  `;
 
-  $('#detail-task-checkbox')?.addEventListener('change', async () => {
-    await toggleDerivedTask(id);
-    renderAppointments();
-  });
-  $('#btn-manual-attendance')?.addEventListener('click', () => {
-    closeModal('modal-appt-detail');
-    showAttendancePrompt(appt);
-  });
+  if (isLembrete) {
+    $('#appt-detail-body').innerHTML = `
+      <p><strong>${formatDateTime(appt.datetime)}</strong></p>
+      <p class="hint">📌 Lembrete · origem: ${appt.source}</p>
+      <div class="field">
+        <label><input type="checkbox" id="lembrete-done-checkbox" ${appt.status === 'confirmado' ? 'checked' : ''} style="width:auto;display:inline-block;margin-right:6px;">
+        Concluído</label>
+      </div>
+    `;
+    $('#lembrete-done-checkbox')?.addEventListener('change', async () => {
+      await toggleLembreteDone(id);
+      renderAppointments();
+    });
+  } else {
+    $('#appt-detail-body').innerHTML = `
+      <p><strong>${formatDateTime(appt.datetime)}</strong></p>
+      <p class="hint">${TYPE_LABELS[appt.type]} · origem: ${appt.source} · status: ${isPastPending ? 'aguardando confirmação' : STATUS_LABELS[appt.status]}</p>
+      ${series ? `<p class="hint">🔁 ${describeRecurrence(series)}${series.until ? ` até ${formatDate(series.until)}` : ''}</p>` : ''}
+      ${appt.derivedTask ? `
+        <div class="field">
+          <label><input type="checkbox" id="detail-task-checkbox" ${appt.derivedTask.done ? 'checked' : ''} style="width:auto;display:inline-block;margin-right:6px;">
+          ${escapeHtml(appt.derivedTask.label)} (prazo: ${formatDate(appt.derivedTask.dueDate)})</label>
+        </div>` : ''}
+      ${appt.status === 'pendente' ? `<button type="button" class="btn btn-secondary btn-small" id="btn-manual-attendance">Registrar comparecimento</button>` : ''}
+    `;
+    $('#detail-task-checkbox')?.addEventListener('change', async () => {
+      await toggleDerivedTask(id);
+      renderAppointments();
+    });
+    $('#btn-manual-attendance')?.addEventListener('click', () => {
+      closeModal('modal-appt-detail');
+      showAttendancePrompt(appt);
+    });
+  }
 
   await renderAttachmentsList(id);
 
-  $('#btn-delete-appt').textContent = series ? 'Excluir somente esta ocorrência' : 'Excluir compromisso';
+  $('#btn-delete-appt').textContent = series ? 'Excluir somente esta ocorrência' : (isLembrete ? 'Excluir lembrete' : 'Excluir compromisso');
   $('#btn-delete-appt').onclick = async () => {
-    if (!confirm('Excluir este compromisso e seus anexos? Esta ação não pode ser desfeita.')) return;
+    if (!confirm(`Excluir este ${isLembrete ? 'lembrete' : 'compromisso'} e seus anexos? Esta ação não pode ser desfeita.`)) return;
     await deleteAppointment(id);
     closeModal('modal-appt-detail');
-    toast('Compromisso excluído.');
+    toast(`${isLembrete ? 'Lembrete' : 'Compromisso'} excluído.`);
     renderAppointments();
   };
 
@@ -327,11 +349,28 @@ function initCaptureModal() {
       $$('.segmented-btn').forEach((b) => { b.classList.remove('is-active'); b.setAttribute('aria-selected', 'false'); });
       btn.classList.add('is-active');
       btn.setAttribute('aria-selected', 'true');
-      const showCompromisso = captureKind === 'compromisso';
+      const showCompromisso = captureKind === 'compromisso' || captureKind === 'lembrete';
       $('#fields-compromisso').hidden = !showCompromisso;
       $('#fields-compromisso').disabled = !showCompromisso;
-      $('#fields-gasto').hidden = showCompromisso;
-      $('#fields-gasto').disabled = showCompromisso;
+      $('#fields-gasto').hidden = captureKind !== 'gasto';
+      $('#fields-gasto').disabled = captureKind !== 'gasto';
+
+      // A lembrete is a compromisso stripped down to title + optional date —
+      // no type, no time slot to conflict over, no recurrence.
+      const isLembrete = captureKind === 'lembrete';
+      $('#lembrete-hint').hidden = !isLembrete;
+      $('#appt-type-field').hidden = isLembrete;
+      $('#appt-type').disabled = isLembrete;
+      $('#appt-time-field').hidden = isLembrete;
+      $('#appt-time').disabled = isLembrete;
+      $('#appt-recurring-field').hidden = isLembrete;
+      $('#appt-recurring').disabled = isLembrete;
+      $('#appt-date').required = !isLembrete;
+      if (isLembrete) {
+        $('#appt-recurring').checked = false;
+        $('#recurrence-fields').hidden = true;
+        $('#conflict-warning').hidden = true;
+      }
     });
   });
 
@@ -460,6 +499,10 @@ function interpretCaptureText() {
       });
     }
     checkAndShowConflict();
+  } else if (captureKind === 'lembrete') {
+    const parsed = parseAppointmentText(text);
+    if (parsed.title) $('#appt-title').value = parsed.title;
+    if (parsed.date) $('#appt-date').value = parsed.date;
   } else {
     const parsed = parseExpenseText(text);
     $('#exp-desc').value = parsed.desc;
@@ -473,9 +516,10 @@ function interpretCaptureText() {
 }
 
 async function checkAndShowConflict() {
+  const warningEl = $('#conflict-warning');
+  if (captureKind === 'lembrete') { warningEl.hidden = true; return; }
   const date = $('#appt-date').value;
   const time = $('#appt-time').value;
-  const warningEl = $('#conflict-warning');
   if (!date || !time) { warningEl.hidden = true; return; }
   const { checkConflicts } = await import('./appointments.js');
   const conflicts = await checkConflicts(`${date}T${time}`);
@@ -517,6 +561,15 @@ async function submitCapture() {
     } else {
       toast(conflicts.length ? 'Compromisso salvo (havia conflito de horário).' : 'Compromisso salvo.');
     }
+    renderAppointments();
+  } else if (captureKind === 'lembrete') {
+    const title = $('#appt-title').value.trim();
+    if (!title) { toast('Preencha um título para o lembrete.', true); return; }
+    const date = $('#appt-date').value;
+    const source = window.__fioShareSource || 'manual';
+    await createAppointment({ title, kind: 'lembrete', datetime: date ? `${date}T09:00` : null, source });
+    closeModal('modal-capture');
+    toast('Lembrete salvo.');
     renderAppointments();
   } else {
     const value = parseFloat($('#exp-value').value);

@@ -50,12 +50,13 @@ export async function checkConflicts(datetimeISO, excludeId = null) {
   });
 }
 
-function buildAppointmentRecord({ title, type, datetime, source, recurrenceGroupId = null }) {
+function buildAppointmentRecord({ title, type, datetime, source, kind = 'compromisso', recurrenceGroupId = null }) {
   const appointment = {
     id: uid(),
-    title: title || 'Compromisso',
-    type: type || 'outro',
-    datetime,
+    title: title || (kind === 'lembrete' ? 'Lembrete' : 'Compromisso'),
+    kind,
+    type: kind === 'lembrete' ? null : (type || 'outro'),
+    datetime: datetime || null,
     status: 'pendente',
     source: source || 'manual',
     derivedTask: null,
@@ -65,7 +66,7 @@ function buildAppointmentRecord({ title, type, datetime, source, recurrenceGroup
     createdAt: new Date().toISOString(),
   };
 
-  const taskLabel = DERIVED_TASK_RULES[appointment.type];
+  const taskLabel = kind === 'compromisso' && DERIVED_TASK_RULES[appointment.type];
   if (taskLabel) {
     const due = addBusinessDays(new Date(datetime), FOLLOWUP_DAYS);
     appointment.derivedTask = { label: taskLabel, done: false, dueDate: isoDate(due) };
@@ -76,6 +77,9 @@ function buildAppointmentRecord({ title, type, datetime, source, recurrenceGroup
 
 async function saveAndMirror(appointment) {
   await db.put('appointments', appointment);
+  // Reminders are a soft, often dateless note — not worth mirroring to Google
+  // Calendar (which needs a real start time). Only compromissos sync.
+  if (appointment.kind === 'lembrete') return appointment;
   // Best-effort mirror; failures never block local creation.
   mirrorAppointmentToGoogleCalendar(appointment)
     .then((eventId) => {
@@ -101,13 +105,15 @@ async function saveAndMirror(appointment) {
  * `recurrenceSeries` store and keeps generating new occurrences on a rolling
  * window as time passes (see extendRecurringAppointments).
  */
-export async function createAppointment({ title, type, datetime, source, recurrence = null }) {
+export async function createAppointment({ title, type, datetime, source, kind = 'compromisso', recurrence = null }) {
   if (recurrence) {
     return generateRecurringSeries({ title, type, datetime, source, recurrence });
   }
 
-  const conflicts = await checkConflicts(datetime);
-  const appointment = await saveAndMirror(buildAppointmentRecord({ title, type, datetime, source }));
+  // Reminders don't have a fixed time slot to conflict over — no date at
+  // all is a valid reminder ("some day"), so there's nothing to check.
+  const conflicts = kind === 'lembrete' ? [] : await checkConflicts(datetime);
+  const appointment = await saveAndMirror(buildAppointmentRecord({ title, type, datetime, source, kind }));
   return { appointment, conflicts, occurrencesCreated: 1, occurrenceConflictCount: 0 };
 }
 
@@ -254,9 +260,11 @@ export async function deleteAppointment(id) {
 export async function listAppointments({ type = null, from = null, to = null } = {}) {
   let all = await db.getAll('appointments');
   if (type) all = all.filter((a) => a.type === type);
-  if (from) all = all.filter((a) => a.datetime >= from);
-  if (to) all = all.filter((a) => a.datetime <= to);
-  return all.sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
+  // A dateless reminder ("some day") has nothing to compare against a date
+  // range, so a from/to filter naturally excludes it rather than erroring.
+  if (from) all = all.filter((a) => a.datetime && a.datetime >= from);
+  if (to) all = all.filter((a) => a.datetime && a.datetime <= to);
+  return all.sort((a, b) => new Date(b.datetime || 0) - new Date(a.datetime || 0));
 }
 
 export async function getAppointment(id) {
@@ -282,6 +290,15 @@ export async function rescheduleAppointment(id, newDatetime) {
   return appt;
 }
 
+/** Toggles a reminder between pending and done — the lembrete equivalent of "Você foi?", but a plain checkbox instead of an attendance prompt. */
+export async function toggleLembreteDone(id) {
+  const appt = await db.get('appointments', id);
+  if (!appt || appt.kind !== 'lembrete') return null;
+  appt.status = appt.status === 'confirmado' ? 'pendente' : 'confirmado';
+  await db.put('appointments', appt);
+  return appt;
+}
+
 export async function toggleDerivedTask(id) {
   const appt = await db.get('appointments', id);
   if (!appt || !appt.derivedTask) return null;
@@ -290,20 +307,20 @@ export async function toggleDerivedTask(id) {
   return appt;
 }
 
-/** Returns appointments whose time has passed but are still "pendente" — used to trigger the "Você foi?" prompt. */
+/** Returns appointments whose time has passed but are still "pendente" — used to trigger the "Você foi?" prompt. Reminders never get this prompt. */
 export async function getOverduePending() {
   const all = await db.getAll('appointments');
   const now = Date.now();
-  return all.filter((a) => a.status === 'pendente' && new Date(a.datetime).getTime() < now);
+  return all.filter((a) => a.kind !== 'lembrete' && a.status === 'pendente' && new Date(a.datetime).getTime() < now);
 }
 
-/** Returns upcoming appointments within the reminder window that haven't been reminded yet. */
+/** Returns upcoming appointments/reminders within the reminder window that haven't been reminded yet. A dateless reminder has nothing to schedule a notification for. */
 export async function getUpcomingForReminder(withinMinutes) {
   const all = await db.getAll('appointments');
   const now = Date.now();
   const windowMs = withinMinutes * 60 * 1000;
   return all.filter((a) => {
-    if (a.status !== 'pendente') return false;
+    if (a.status !== 'pendente' || !a.datetime) return false;
     const t = new Date(a.datetime).getTime();
     return t > now && t - now <= windowMs;
   });
