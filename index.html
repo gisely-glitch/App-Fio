@@ -154,6 +154,7 @@
 
     <div class="segmented" role="tablist" aria-label="Tipo de captura">
       <button type="button" class="segmented-btn is-active" data-capture-kind="compromisso" role="tab" aria-selected="true">Compromisso</button>
+      <button type="button" class="segmented-btn" data-capture-kind="lembrete" role="tab" aria-selected="false">Lembrete</button>
       <button type="button" class="segmented-btn" data-capture-kind="gasto" role="tab" aria-selected="false">Gasto</button>
     </div>
 
@@ -178,8 +179,9 @@
         <label for="appt-title">Título</label>
         <input type="text" id="appt-title" required>
       </div>
+      <p id="lembrete-hint" class="hint" hidden>Um lembrete não precisa de hora nem data — só do título. Se quiser, coloque uma data para receber um aviso.</p>
       <div class="field-row">
-        <div class="field">
+        <div class="field" id="appt-type-field">
           <label for="appt-type">Tipo</label>
           <select id="appt-type">
             <option value="consulta">Consulta</option>
@@ -192,14 +194,14 @@
           <label for="appt-date">Data</label>
           <input type="date" id="appt-date" required>
         </div>
-        <div class="field">
+        <div class="field" id="appt-time-field">
           <label for="appt-time">Hora</label>
           <input type="time" id="appt-time" required>
         </div>
       </div>
       <p id="conflict-warning" class="warning-banner" role="alert" hidden></p>
 
-      <div class="field">
+      <div class="field" id="appt-recurring-field">
         <label class="checkbox-label">
           <input type="checkbox" id="appt-recurring">
           Repetir (ex: academia toda terça e quinta)
